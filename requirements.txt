@@ -1,10 +1,25 @@
+# requirements.txt - Fixed & Optimized for Render
+
+# Core Framework
+fastapi
+uvicorn[standard]
+gunicorn
+
+# Telegram & Streaming
 https://github.com/KurimuzonAkuma/pyrogram/archive/dev.zip
 tgcrypto
-uvicorn[standard]
-fastapi
-python-dotenv
+
+# Async & HTTP
+aiohttp
 aiofiles
 httpx
+
+# Utilities
+python-dotenv
 python-multipart
 dill
-gunicorn
+pydantic
+pydantic-settings
+
+# Optional but useful
+tqdm
