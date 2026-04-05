@@ -84,11 +84,12 @@
             bottom: 0;
             left: 0;
             right: 0;
-            background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.95));
             padding: var(--space-6) var(--space-4) var(--space-4);
             transform: translateY(100%);
             transition: transform var(--transition-normal);
             z-index: 100;
+            backdrop-filter: blur(10px);
         }
 
         .controls-overlay.show {
@@ -101,19 +102,25 @@
 
         .progress-bar {
             width: 100%;
-            height: 6px;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 3px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.25);
+            border-radius: 4px;
             cursor: pointer;
             position: relative;
+            transition: height 0.2s;
+        }
+
+        .progress-bar:hover {
+            height: 10px;
         }
 
         .progress-filled {
             height: 100%;
             background: var(--primary-500);
-            border-radius: 3px;
+            border-radius: 4px;
             width: 0%;
             transition: width 0.1s ease;
+            box-shadow: 0 0 10px rgba(14, 165, 233, 0.5);
         }
 
         .progress-buffered {
@@ -148,8 +155,9 @@
         }
 
         .control-btn:hover {
-            background: rgba(255, 255, 255, 0.2);
-            border-color: rgba(255, 255, 255, 0.4);
+            background: rgba(255, 255, 255, 0.3);
+            border-color: rgba(255, 255, 255, 0.5);
+            transform: scale(1.05);
         }
 
         .control-btn.active {
@@ -212,11 +220,12 @@
             top: 0;
             left: 0;
             right: 0;
-            background: linear-gradient(rgba(0, 0, 0, 0.8), transparent);
+            background: linear-gradient(rgba(0, 0, 0, 0.95), transparent);
             padding: var(--space-4);
             transform: translateY(-100%);
             transition: transform var(--transition-normal);
             z-index: 100;
+            backdrop-filter: blur(10px);
         }
 
         .top-controls.show {
@@ -639,13 +648,6 @@
                     </svg>
                 </button>
 
-                <button class="control-btn" id="landscapeBtn" title="Landscape Mode">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-                        <path d="M9 9l6 6M15 9l-6 6"/>
-                    </svg>
-                </button>
-
                 <button class="control-btn" id="fullscreenBtn" title="Fullscreen">
                     <svg id="fullscreenIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
@@ -752,7 +754,6 @@
             rewindBtn.addEventListener('click', () => seek(-10));
             forwardBtn.addEventListener('click', () => seek(10));
             pipBtn.addEventListener('click', togglePiP);
-            landscapeBtn.addEventListener('click', toggleLandscape);
             fullscreenBtn.addEventListener('click', toggleFullscreen);
 
             // Progress bar
@@ -856,16 +857,6 @@
                 document.exitPictureInPicture();
             } else if (document.pictureInPictureEnabled) {
                 video.requestPictureInPicture();
-            }
-        }
-
-        function toggleLandscape() {
-            if (screen.orientation && screen.orientation.lock) {
-                if (screen.orientation.angle === 0) {
-                    screen.orientation.lock('landscape');
-                } else {
-                    screen.orientation.lock('portrait');
-                }
             }
         }
 

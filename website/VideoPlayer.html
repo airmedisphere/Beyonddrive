@@ -3,354 +3,374 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EduMaster Pro - Video Player</title>
+    <title>Video Player - EduMaster Pro</title>
 
     <link href="//vjs.zencdn.net/8.3.0/video-js.min.css" rel="stylesheet">
     <script src="//vjs.zencdn.net/8.3.0/video.min.js"></script>
 
     <style>
-        :root {
-            --primary-500: #0ea5e9;
-            --primary-600: #0284c7;
-            --primary-700: #0369a1;
-            --secondary-50: #f8fafc;
-            --secondary-100: #f1f5f9;
-            --secondary-200: #e2e8f0;
-            --secondary-600: #475569;
-            --secondary-700: #334155;
-            --secondary-800: #1e293b;
-            --secondary-900: #0f172a;
-            --success-500: #22c55e;
-            --success-600: #16a34a;
-            --warning-500: #f59e0b;
-            --warning-600: #d97706;
-            --space-4: 1rem;
-            --space-5: 1.25rem;
-            --space-6: 1.5rem;
-            --radius-lg: 0.75rem;
-            --radius-xl: 1rem;
-            --radius-2xl: 1.5rem;
-            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-            --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
-            --shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
-            --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-            --transition-normal: 300ms cubic-bezier(0.4, 0, 0.2, 1);
-        }
-
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
 
         body {
-            background: linear-gradient(135deg, var(--primary-500) 0%, var(--primary-700) 100%);
+            background: #0a0a0a;
+            color: white;
             min-height: 100vh;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: var(--space-6);
-            color: var(--secondary-800);
         }
 
-        .header {
-            text-align: center;
-            margin-bottom: var(--space-6);
-            color: white;
+        .player-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+            padding: 20px;
         }
 
-        .header h1 {
-            font-size: 2.5rem;
-            font-weight: 800;
-            margin-bottom: var(--space-4);
-            text-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        .player-header {
+            margin-bottom: 20px;
+            padding: 0 10px;
         }
 
-        .header p {
-            font-size: 1.1rem;
-            opacity: 0.9;
-            font-weight: 500;
+        .player-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 5px;
+        }
+
+        .player-subtitle {
+            font-size: 0.9rem;
+            color: #888;
         }
 
         .video-container {
-            width: 100%;
-            max-width: 1200px;
-            background: white;
-            border-radius: var(--radius-2xl);
-            overflow: hidden;
-            box-shadow: var(--shadow-2xl);
             position: relative;
-            margin-bottom: var(--space-6);
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+            margin-bottom: 20px;
         }
 
         .video-js {
             width: 100% !important;
             height: auto !important;
-            border-radius: var(--radius-2xl);
+            aspect-ratio: 16/9;
         }
 
-        /* Controls */
-        .speed-controls-container, .quality-controls-container {
+        .video-js .vjs-big-play-button {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(14, 165, 233, 0.9);
+            border: none;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            transition: all 0.2s;
+        }
+
+        .video-js .vjs-big-play-button:hover {
+            background: rgba(14, 165, 233, 1);
+            transform: translate(-50%, -50%) scale(1.1);
+        }
+
+        .video-js .vjs-control-bar {
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
+            height: 60px;
+            padding: 0 15px;
+        }
+
+        .video-js .vjs-progress-control {
             position: absolute;
-            top: var(--space-4);
+            top: -10px;
+            left: 0;
+            right: 0;
+            width: 100%;
+            height: 10px;
+        }
+
+        .video-js .vjs-progress-holder {
+            height: 6px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 3px;
+        }
+
+        .video-js .vjs-play-progress {
+            background: #0ea5e9;
+            border-radius: 3px;
+        }
+
+        .video-js .vjs-load-progress {
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 3px;
+        }
+
+        .controls-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
             z-index: 1000;
-            background: rgba(0, 0, 0, 0.9);
-            border-radius: var(--radius-xl);
-            padding: var(--space-4);
+            display: flex;
+            gap: 10px;
+        }
+
+        .control-group {
+            background: rgba(0, 0, 0, 0.85);
             backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 12px;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
-        .speed-controls-container { right: var(--space-4); }
-        .quality-controls-container { left: var(--space-4); }
-
-        .speed-controls-title, .quality-controls-title {
-            color: white;
-            font-size: 0.8rem;
-            font-weight: 700;
-            text-align: center;
-            margin-bottom: var(--space-2);
-            opacity: 0.9;
+        .control-label {
+            font-size: 0.7rem;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            color: #888;
+            margin-bottom: 8px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
         }
 
-        .speed-controls {
+        .speed-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: var(--space-1);
-            max-width: 200px;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
         }
 
-        .quality-controls {
+        .quality-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: var(--space-1);
-            max-width: 160px;
-        }
-
-        .speed-btn, .quality-btn {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: var(--space-2);
-            border-radius: var(--radius-lg);
-            font-size: 0.75rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all var(--transition-fast);
-            text-align: center;
-        }
-
-        .speed-btn:hover, .quality-btn:hover {
-            background: rgba(255, 255, 255, 0.2);
-            border-color: rgba(255, 255, 255, 0.4);
-            transform: scale(1.05);
-        }
-
-        .speed-btn.active {
-            background: var(--primary-500);
-            border-color: var(--primary-500);
-            box-shadow: 0 0 20px rgba(14, 165, 233, 0.5);
-        }
-
-        .quality-btn.active {
-            background: var(--success-500);
-            border-color: var(--success-500);
-            box-shadow: 0 0 20px rgba(34, 197, 94, 0.5);
-        }
-
-        .speed-indicator, .quality-indicator {
-            position: absolute;
-            bottom: var(--space-4);
-            background: rgba(0, 0, 0, 0.9);
-            color: white;
-            padding: var(--space-2) var(--space-4);
-            border-radius: var(--radius-lg);
-            font-size: 0.9rem;
-            font-weight: 700;
-            z-index: 1000;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .speed-indicator { left: var(--space-4); }
-        .quality-indicator { right: var(--space-4); }
-
-        .controls-container {
-            display: flex;
-            justify-content: center;
-            gap: var(--space-4);
-            width: 100%;
-            max-width: 1200px;
-            flex-wrap: wrap;
+            gap: 6px;
         }
 
         .control-btn {
-            padding: var(--space-4) var(--space-6);
-            font-size: 1rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 0.75rem;
             font-weight: 600;
             cursor: pointer;
-            border: none;
-            border-radius: var(--radius-xl);
-            transition: all var(--transition-fast);
-            min-width: 180px;
-            box-shadow: var(--shadow-lg);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: var(--space-2);
+            transition: all 0.2s;
+            text-align: center;
+            min-width: 50px;
         }
 
         .control-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-xl);
+            background: rgba(255, 255, 255, 0.2);
+            transform: scale(1.05);
         }
 
-        .btn-primary { background: linear-gradient(135deg, var(--primary-500), var(--primary-600)); color: white; }
-        .btn-success { background: linear-gradient(135deg, var(--success-500), var(--success-600)); color: white; }
-        .btn-warning { background: linear-gradient(135deg, var(--warning-500), var(--warning-600)); color: white; }
+        .control-btn.active {
+            background: #0ea5e9;
+            border-color: #0ea5e9;
+            box-shadow: 0 0 15px rgba(14, 165, 233, 0.5);
+        }
 
-        /* Mobile */
+        .bottom-controls {
+            display: flex;
+            gap: 15px;
+            padding: 0 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .action-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .action-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .action-btn.primary {
+            background: linear-gradient(135deg, #0ea5e9, #0284c7);
+            border-color: #0ea5e9;
+        }
+
+        .action-btn.primary:hover {
+            background: linear-gradient(135deg, #0284c7, #0369a1);
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #22c55e;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            transform: translateX(400px);
+            transition: transform 0.3s;
+            z-index: 10000;
+            font-weight: 600;
+        }
+
+        .notification.show {
+            transform: translateX(0);
+        }
+
+        @media (max-width: 1024px) {
+            .controls-panel {
+                position: relative;
+                top: 0;
+                right: 0;
+                justify-content: center;
+                margin-bottom: 15px;
+                flex-wrap: wrap;
+            }
+
+            .player-wrapper {
+                padding: 15px;
+            }
+        }
+
         @media (max-width: 768px) {
-            body { padding: var(--space-4); }
-            .header h1 { font-size: 2rem; }
-            .speed-controls { grid-template-columns: repeat(3, 1fr); max-width: 150px; }
-            .control-btn { min-width: 150px; flex: 1; max-width: 200px; }
+            .player-title {
+                font-size: 1.2rem;
+            }
+
+            .speed-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .quality-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .control-btn {
+                padding: 6px 10px;
+                font-size: 0.7rem;
+                min-width: 45px;
+            }
+
+            .action-btn {
+                padding: 10px 18px;
+                font-size: 0.85rem;
+            }
+
+            .bottom-controls {
+                gap: 10px;
+            }
         }
 
         @media (max-width: 480px) {
-            .speed-controls { grid-template-columns: repeat(2, 1fr); max-width: 100px; }
-            .quality-controls { grid-template-columns: repeat(1, 1fr); max-width: 80px; }
-            .controls-container { flex-direction: column; align-items: center; }
-            .control-btn { width: 100%; max-width: 280px; margin-bottom: var(--space-2); }
-        }
+            .player-wrapper {
+                padding: 10px;
+            }
 
-        /* Loading */
-        .video-container.loading {
-            background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
-            background-size: 200% 100%;
-            animation: loading 1.5s infinite;
-        }
+            .player-header {
+                margin-bottom: 15px;
+            }
 
-        @keyframes loading {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-        }
+            .video-js .vjs-big-play-button {
+                width: 60px;
+                height: 60px;
+            }
 
-        .error-message {
-            color: #dc2626;
-            text-align: center;
-            padding: var(--space-6);
-            background: #fef2f2;
-            border: 1px solid #fecaca;
-            border-radius: var(--radius-xl);
-            margin: var(--space-6) 0;
-            max-width: 600px;
-            font-weight: 600;
-        }
+            .control-group {
+                padding: 10px;
+            }
 
-        .success-message {
-            position: fixed;
-            top: var(--space-6);
-            right: var(--space-6);
-            background: var(--success-500);
-            color: white;
-            padding: var(--space-4) var(--space-6);
-            border-radius: var(--radius-xl);
-            box-shadow: var(--shadow-xl);
-            transform: translateX(100%);
-            transition: transform var(--transition-normal);
-            z-index: 1000;
-            font-weight: 600;
-        }
+            .bottom-controls {
+                flex-direction: column;
+                width: 100%;
+            }
 
-        .success-message.show { transform: translateX(0); }
+            .action-btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>🎓 EduMaster Pro</h1>
-        <p>Premium Learning Experience</p>
-    </div>
-
-    <div class="video-container" id="video-container">
-        <!-- Speed Controls -->
-        <div class="speed-controls-container" id="speed-controls">
-            <div class="speed-controls-title">🎬 Playback Speed</div>
-            <div class="speed-controls">
-                <button class="speed-btn" data-speed="0.25">0.25x</button>
-                <button class="speed-btn" data-speed="0.5">0.5x</button>
-                <button class="speed-btn" data-speed="0.75">0.75x</button>
-                <button class="speed-btn active" data-speed="1">1.0x</button>
-                <button class="speed-btn" data-speed="1.25">1.25x</button>
-                <button class="speed-btn" data-speed="1.5">1.5x</button>
-                <button class="speed-btn" data-speed="1.75">1.75x</button>
-                <button class="speed-btn" data-speed="2">2.0x</button>
-                <button class="speed-btn" data-speed="2.5">2.5x</button>
-                <button class="speed-btn" data-speed="3">3.0x</button>
-                <button class="speed-btn" data-speed="3.5">3.5x</button>
-                <button class="speed-btn" data-speed="4">4.0x</button>
-            </div>
+    <div class="player-wrapper">
+        <div class="player-header">
+            <h1 class="player-title">EduMaster Pro - Video Player</h1>
+            <p class="player-subtitle">Premium Learning Experience</p>
         </div>
 
-        <!-- Quality Controls -->
-        <div class="quality-controls-container" id="quality-controls">
-            <div class="quality-controls-title">📺 Video Quality</div>
-            <div class="quality-controls">
-                <button class="quality-btn active" data-quality="original">Original</button>
-                <button class="quality-btn" data-quality="480p">480p</button>
-                <button class="quality-btn" data-quality="360p">360p</button>
-                <button class="quality-btn" data-quality="240p">240p</button>
+        <div class="video-container">
+            <div class="controls-panel">
+                <div class="control-group">
+                    <div class="control-label">Speed</div>
+                    <div class="speed-grid">
+                        <button class="control-btn" data-speed="0.5">0.5x</button>
+                        <button class="control-btn" data-speed="0.75">0.75x</button>
+                        <button class="control-btn active" data-speed="1">1x</button>
+                        <button class="control-btn" data-speed="1.25">1.25x</button>
+                        <button class="control-btn" data-speed="1.5">1.5x</button>
+                        <button class="control-btn" data-speed="2">2x</button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <div class="control-label">Quality</div>
+                    <div class="quality-grid">
+                        <button class="control-btn active" data-quality="original">Original</button>
+                        <button class="control-btn" data-quality="480p">480p</button>
+                        <button class="control-btn" data-quality="360p">360p</button>
+                        <button class="control-btn" data-quality="240p">240p</button>
+                    </div>
+                </div>
             </div>
+
+            <video id="my-player" class="video-js vjs-fluid" controls preload="metadata" data-setup='{}'>
+                <source id="video-src" src="" type="video/mp4">
+                <p class="vjs-no-js">
+                    To view this video please enable JavaScript and use a modern browser.
+                </p>
+            </video>
         </div>
 
-        <!-- Indicators -->
-        <div class="speed-indicator" id="speed-indicator">1.0x</div>
-        <div class="quality-indicator" id="quality-indicator">Original</div>
-
-        <video id="my-player" class="video-js vjs-fluid" controls preload="metadata" data-setup='{}'>
-            <source id="video-src" src="" type="video/mp4">
-            <p class="vjs-no-js">
-                To view this video please enable JavaScript and use a modern browser.
-            </p>
-        </video>
+        <div class="bottom-controls">
+            <button class="action-btn primary" onclick="copyStreamUrl()">
+                📋 Copy Stream URL
+            </button>
+            <button class="action-btn" onclick="copyDownloadUrl()">
+                📋 Copy Download URL
+            </button>
+            <button class="action-btn" onclick="openDownloadUrl()">
+                ⬇️ Open Download
+            </button>
+        </div>
     </div>
 
-    <div class="controls-container">
-        <button class="control-btn btn-primary" onclick="copyStreamUrl()">
-            📋 Copy Stream URL
-        </button>
-        <button class="control-btn btn-warning" onclick="copyDownloadUrl()">
-            📋 Copy Download URL
-        </button>
-        <button class="control-btn btn-success" onclick="openDownloadUrl()">
-            ⬇️ Open Download URL
-        </button>
-    </div>
+    <div class="notification" id="notification"></div>
 
     <script>
         const downloadUrl = new URL(window.location.href).searchParams.get('url');
-        const videoContainer = document.getElementById('video-container');
-        const speedIndicator = document.getElementById('speed-indicator');
-        const qualityIndicator = document.getElementById('quality-indicator');
-
+        let player = null;
         let currentSpeed = 1.0;
         let currentQuality = 'original';
-        let player = null;
-        let availableQualities = ['original'];
-
-        const speedPresets = { '1':0.25, '2':0.5, '3':0.75, '4':1.0, '5':1.25, '6':1.5, '7':1.75, '8':2.0, '9':2.5 };
 
         if (!downloadUrl) {
-            showError('No video URL provided in ?url= parameter.');
+            alert('No video URL provided in ?url= parameter.');
         } else {
-            videoContainer.classList.add('loading');
-
             player = videojs('my-player', {
                 responsive: true,
                 fluid: true,
@@ -363,27 +383,16 @@
             player.src({ type: "video/mp4", src: downloadUrl });
 
             player.ready(() => {
-                videoContainer.classList.remove('loading');
-
-                // Load saved preferences
                 const savedSpeed = localStorage.getItem('videoSpeed');
                 if (savedSpeed) setPlaybackSpeed(parseFloat(savedSpeed));
 
                 const savedQuality = localStorage.getItem('videoQuality');
                 if (savedQuality) setVideoQuality(savedQuality);
-
-                showKeyboardShortcuts();
-            });
-
-            player.on('error', () => {
-                videoContainer.classList.remove('loading');
-                showError('Failed to load video. Please check the URL.');
             });
         }
 
-        // Improved Quality Switching
         async function setVideoQuality(quality) {
-            if (!player || !availableQualities.includes(quality)) return;
+            if (!player) return;
 
             const currentTime = player.currentTime() || 0;
             const wasPlaying = !player.paused();
@@ -408,7 +417,6 @@
                 localStorage.setItem('videoQuality', quality);
             });
 
-            // Fallback resume
             setTimeout(() => {
                 if (player.currentTime() < 1 && currentTime > 1) {
                     player.currentTime(currentTime);
@@ -426,36 +434,29 @@
         }
 
         function updateSpeedDisplay(speed) {
-            speedIndicator.textContent = speed + 'x';
-            document.querySelectorAll('.speed-btn').forEach(btn => {
+            document.querySelectorAll('[data-speed]').forEach(btn => {
                 btn.classList.toggle('active', parseFloat(btn.dataset.speed) === speed);
             });
         }
 
         function updateQualityDisplay(quality) {
-            qualityIndicator.textContent = quality === 'original' ? 'Original' : quality.toUpperCase();
-            document.querySelectorAll('.quality-btn').forEach(btn => {
+            document.querySelectorAll('[data-quality]').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.quality === quality);
             });
         }
 
-        function adjustSpeed(increment) {
-            const newSpeed = Math.max(0.25, Math.min(4.0, currentSpeed + increment));
-            setPlaybackSpeed(newSpeed);
-        }
-
-        // Button listeners
-        document.querySelectorAll('.speed-btn').forEach(btn => {
+        document.querySelectorAll('[data-speed]').forEach(btn => {
             btn.addEventListener('click', () => setPlaybackSpeed(parseFloat(btn.dataset.speed)));
         });
 
-        document.querySelectorAll('.quality-btn').forEach(btn => {
+        document.querySelectorAll('[data-quality]').forEach(btn => {
             btn.addEventListener('click', () => setVideoQuality(btn.dataset.quality));
         });
 
-        // Keyboard Shortcuts
         document.addEventListener('keydown', (e) => {
             if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+
+            const speedPresets = { '1':0.25, '2':0.5, '3':0.75, '4':1.0, '5':1.25, '6':1.5, '7':1.75, '8':2.0, '9':2.5 };
 
             if (speedPresets[e.key]) {
                 e.preventDefault();
@@ -463,51 +464,22 @@
             } else if (e.key === '0') {
                 e.preventDefault();
                 setPlaybackSpeed(1.0);
-            } else if (e.key.toLowerCase() === 'q') {
-                e.preventDefault();
-                const idx = availableQualities.indexOf(currentQuality);
-                setVideoQuality(availableQualities[(idx + 1) % availableQualities.length]);
-            } else if (e.key === '+' || e.key === '=') {
-                e.preventDefault();
-                adjustSpeed(0.25);
-            } else if (e.key === '-') {
-                e.preventDefault();
-                adjustSpeed(-0.25);
-            } else if (e.ctrlKey || e.metaKey) {
-                if (e.key === 'ArrowUp') adjustSpeed(0.25);
-                if (e.key === 'ArrowDown') adjustSpeed(-0.25);
-                if (e.key === 'c') copyStreamUrl();
-                if (e.key === 'd') copyDownloadUrl();
-                if (e.key === 'o') openDownloadUrl();
             }
         });
 
-        function showError(message) {
-            const div = document.createElement('div');
-            div.className = 'error-message';
-            div.textContent = message;
-            videoContainer.parentNode.insertBefore(div, videoContainer.nextSibling);
-        }
+        function showNotification(msg) {
+            const notification = document.getElementById('notification');
+            notification.textContent = msg;
+            notification.classList.add('show');
 
-        function showSuccessMessage(msg) {
-            const existing = document.querySelector('.success-message');
-            if (existing) existing.remove();
-
-            const div = document.createElement('div');
-            div.className = 'success-message';
-            div.textContent = msg;
-            document.body.appendChild(div);
-
-            setTimeout(() => div.classList.add('show'), 50);
             setTimeout(() => {
-                div.classList.remove('show');
-                setTimeout(() => div.remove(), 300);
-            }, 2800);
+                notification.classList.remove('show');
+            }, 2500);
         }
 
         function copyTextToClipboard(text) {
             navigator.clipboard.writeText(text).then(() => {
-                showSuccessMessage('Link copied to clipboard!');
+                showNotification('Link copied to clipboard!');
             }).catch(() => {
                 const ta = document.createElement('textarea');
                 ta.value = text;
@@ -517,7 +489,7 @@
                 ta.select();
                 document.execCommand('copy');
                 document.body.removeChild(ta);
-                showSuccessMessage('Link copied to clipboard!');
+                showNotification('Link copied to clipboard!');
             });
         }
 
@@ -525,7 +497,6 @@
         function copyDownloadUrl() { if (downloadUrl) copyTextToClipboard(downloadUrl); }
         function openDownloadUrl() { if (downloadUrl) window.open(downloadUrl, '_blank'); }
 
-        // Resize handling
         window.addEventListener('resize', () => player && player.trigger('resize'));
     </script>
 </body>
