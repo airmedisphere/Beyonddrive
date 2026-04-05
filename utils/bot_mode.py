@@ -1041,7 +1041,7 @@ async def set_folder_handler(client: Client, message: Message):
 @main_bot.on_callback_query(
     filters.user(config.TELEGRAM_ADMIN_IDS) & filters.regex(r"set_folder_")
 )
-async def set_folder_callback(client: Client, callback_query: Message):
+async def set_folder_callback(client: Client, callback_query):
     """
     Handles the callback query when a user selects a folder from the inline buttons.
     Sets the selected folder as the current default and saves it to a config file.
@@ -1153,25 +1153,26 @@ async def file_handler(client: Client, message: Message):
         )
         return
 
-    copied_message = await message.copy(config.STORAGE_CHANNEL)
-    file = (
-        copied_message.document
-        or copied_message.video
-        or copied_message.audio
-        or copied_message.photo
-        or copied_message.sticker
-    )
+    try:
+        copied_message = await message.copy(config.STORAGE_CHANNEL)
+        file = (
+            copied_message.document
+            or copied_message.video
+            or copied_message.audio
+            or copied_message.photo
+            or copied_message.sticker
+        )
 
-    DRIVE_DATA.new_file(
-        BOT_MODE.current_folder,
-        file.file_name,
-        copied_message.id,
-        file.file_size,
-    )
+        DRIVE_DATA.new_file(
+            BOT_MODE.current_folder,
+            file.file_name,
+            copied_message.id,
+            file.file_size,
+        )
 
-    await message.reply_text(
-        f"""✅ **File Uploaded Successfully!**
-                             
+        await message.reply_text(
+            f"""✅ **File Uploaded Successfully!**
+
 **File Name:** {file.file_name}
 **Folder:** {BOT_MODE.current_folder_name}
 **Size:** {file.file_size / (1024*1024):.2f} MB
@@ -1183,7 +1184,15 @@ async def file_handler(client: Client, message: Message):
 • Use /bulk_import to import files in bulk
 • Use /fast_import to import files directly (fast)
 """
-    )
+        )
+    except Exception as e:
+        logger.error(f"Error uploading file: {e}")
+        await message.reply_text(
+            f"❌ **Error uploading file**\n\n"
+            f"Failed to upload the file to the storage channel.\n\n"
+            f"**Error:** {str(e)}\n\n"
+            f"Please try again or contact support if the issue persists."
+        )
 
 # --- GENERIC MESSAGE HANDLER (Lowest Priority) ---
 # This handler MUST be defined AFTER all specific command and file handlers.
@@ -1244,31 +1253,28 @@ async def start_bot_mode(d, b):
         BOT_MODE.set_folder(default_folder_path, default_folder_name_to_use)
         message_to_send = f"Main Bot Started -> TG Drive's Bot Mode Enabled with previously set folder: {default_folder_name_to_use}"
     else:
-        hardcoded_default_folder_name = "grammar"
-        search_result = DRIVE_DATA.search_file_folder(hardcoded_default_folder_name)
-        found_grammar = False
-        for item in search_result.values():
-            if item.type == "folder":
-                path_segments = [seg for seg in item.path.strip("/").split("/") if seg]
-                folder_path = "/" + ("/".join(path_segments + [item.id]))
-                
-                BOT_MODE.set_folder(folder_path, item.name)
-                logger.info(f"Default folder set to: {item.name} -> {folder_path}")
-                try:
-                    with open(DEFAULT_FOLDER_CONFIG_FILE, "w") as f:
-                        json.dump({"current_folder": folder_path, "current_folder_name": item.name}, f)
-                    logger.info(f"Saved initial 'grammar' default folder to config.")
-                except Exception as e:
-                    logger.error(f"Failed to save initial default folder config: {e}")
-                found_grammar = True
-                break
-        if not found_grammar:
-            logger.warning(f"No folder found with name '{hardcoded_default_folder_name}'. No default folder set initially.")
-            BOT_MODE.set_folder(None, "No default folder set. Please use /set_folder.") 
-            message_to_send = "Main Bot Started -> TG Drive's Bot Mode Enabled. No 'grammar' folder found, please use /set_folder to choose one."
+        # Try to find any existing folder as default
+        all_folders = [item for item in DRIVE_DATA.drive_data.values() if item.type == "folder"]
 
+        if all_folders:
+            # Use the first available folder
+            first_folder = all_folders[0]
+            path_segments = [seg for seg in first_folder.path.strip("/").split("/") if seg]
+            folder_path = "/" + ("/".join(path_segments + [first_folder.id]))
+
+            BOT_MODE.set_folder(folder_path, first_folder.name)
+            logger.info(f"Default folder set to: {first_folder.name} -> {folder_path}")
+            try:
+                with open(DEFAULT_FOLDER_CONFIG_FILE, "w") as f:
+                    json.dump({"current_folder": folder_path, "current_folder_name": first_folder.name}, f)
+                logger.info(f"Saved initial default folder to config.")
+            except Exception as e:
+                logger.error(f"Failed to save initial default folder config: {e}")
+            message_to_send = f"Main Bot Started -> TG Drive's Bot Mode Enabled with default folder: {first_folder.name}"
         else:
-            message_to_send = "Main Bot Started -> TG Drive's Bot Mode Enabled with default folder Grammar"
+            logger.warning(f"No folders found in drive. No default folder set initially.")
+            BOT_MODE.set_folder(None, "No default folder set. Please use /set_folder.")
+            message_to_send = "Main Bot Started -> TG Drive's Bot Mode Enabled. No folders found, please use /set_folder to choose one."
 
     await main_bot.send_message(
         config.STORAGE_CHANNEL,
