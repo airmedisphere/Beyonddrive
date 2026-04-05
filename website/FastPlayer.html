@@ -137,6 +137,26 @@
             align-items: center;
             gap: var(--space-4);
             flex-wrap: wrap;
+            position: relative;
+        }
+
+        .scroll-indicator {
+            position: absolute;
+            right: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            background: linear-gradient(to right, transparent, rgba(0, 0, 0, 0.9));
+            padding: var(--space-4) var(--space-2) var(--space-4) var(--space-6);
+            color: white;
+            font-size: 1.2rem;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity var(--transition-fast);
+            z-index: 10;
+        }
+
+        .scroll-indicator.show {
+            opacity: 1;
         }
 
         .control-btn {
@@ -616,6 +636,15 @@
                     </svg>
                 </button>
 
+                <button class="control-btn" id="fullscreenBtn" title="Fullscreen">
+                    <svg id="fullscreenIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                    </svg>
+                    <svg id="exitFullscreenIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
+                        <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+                    </svg>
+                </button>
+
                 <div class="volume-container">
                     <button class="control-btn" id="muteBtn">
                         <svg id="volumeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -635,14 +664,6 @@
 
                 <div class="time-display" id="timeDisplay">0:00 / 0:00</div>
 
-                <button class="control-btn" id="speedBtn" title="Playback Speed">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"/>
-                        <polyline points="12,6 12,12 16,14"/>
-                    </svg>
-                </button>
-                <div class="speed-display" id="speedDisplay">1x</div>
-
                 <button class="control-btn" id="rewindBtn" title="Rewind 10s">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
@@ -659,6 +680,14 @@
                     </svg>
                 </button>
 
+                <button class="control-btn" id="speedBtn" title="Playback Speed">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12,6 12,12 16,14"/>
+                    </svg>
+                </button>
+                <div class="speed-display" id="speedDisplay">1x</div>
+
                 <button class="control-btn" id="pipBtn" title="Picture-in-Picture">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M2 3h20v14H2z"/>
@@ -668,14 +697,7 @@
                     </svg>
                 </button>
 
-                <button class="control-btn" id="fullscreenBtn" title="Fullscreen">
-                    <svg id="fullscreenIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-                    </svg>
-                    <svg id="exitFullscreenIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
-                        <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
-                    </svg>
-                </button>
+                <div class="scroll-indicator" id="scrollIndicator">→</div>
             </div>
         </div>
     </div>
@@ -1095,10 +1117,32 @@
             }
         }
 
+        // Scroll indicator for mobile
+        const controlsRow = document.querySelector('.controls-row');
+        const scrollIndicator = document.getElementById('scrollIndicator');
+
+        function checkScrollIndicator() {
+            if (controlsRow && scrollIndicator) {
+                const hasScroll = controlsRow.scrollWidth > controlsRow.clientWidth;
+                const isAtEnd = controlsRow.scrollLeft + controlsRow.clientWidth >= controlsRow.scrollWidth - 10;
+
+                if (hasScroll && !isAtEnd) {
+                    scrollIndicator.classList.add('show');
+                } else {
+                    scrollIndicator.classList.remove('show');
+                }
+            }
+        }
+
+        if (controlsRow) {
+            controlsRow.addEventListener('scroll', checkScrollIndicator);
+            window.addEventListener('resize', checkScrollIndicator);
+        }
+
         // Initialize player when page loads
         document.addEventListener('DOMContentLoaded', () => {
             initPlayer();
-            
+
             // Load saved speed preference
             const savedSpeed = localStorage.getItem('fastPlayerSpeed');
             if (savedSpeed) {
@@ -1106,6 +1150,9 @@
                 video.playbackRate = currentSpeed;
                 updateSpeedDisplay();
             }
+
+            // Check scroll indicator on load
+            setTimeout(checkScrollIndicator, 500);
         });
 
         // Handle page visibility change
