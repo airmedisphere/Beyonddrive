@@ -396,12 +396,23 @@
         @media (max-width: 768px) {
             .controls-row {
                 gap: var(--space-2);
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                -ms-overflow-style: none;
+                padding-bottom: var(--space-2);
+            }
+
+            .controls-row::-webkit-scrollbar {
+                display: none;
             }
 
             .control-btn {
                 min-width: 40px;
                 min-height: 40px;
                 padding: var(--space-1);
+                flex-shrink: 0;
             }
 
             .control-btn svg {
@@ -414,12 +425,21 @@
                 height: 20px;
             }
 
+            .volume-container {
+                flex-shrink: 0;
+            }
+
             .volume-slider {
                 width: 60px;
             }
 
             .time-display {
                 font-size: 0.8rem;
+                flex-shrink: 0;
+            }
+
+            .speed-display {
+                flex-shrink: 0;
             }
 
             .center-play {

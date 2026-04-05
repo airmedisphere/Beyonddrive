@@ -17,14 +17,26 @@ class SmartImportManager:
         try:
             # Try to get channel info
             channel = await client.get_chat(channel_identifier)
-            
+
             # Check if bot is admin
-            bot_member = await client.get_chat_member(channel.id, "me")
-            is_admin = bot_member.privileges and (bot_member.privileges.can_delete_messages or bot_member.privileges.can_edit_messages)
-            
+            try:
+                bot_member = await client.get_chat_member(channel.id, "me")
+                is_admin = bot_member.privileges and (bot_member.privileges.can_delete_messages or bot_member.privileges.can_edit_messages)
+            except Exception as member_err:
+                # Bot is not a member or not an admin
+                error_msg = str(member_err)
+                if "USER_NOT_PARTICIPANT" in error_msg or "not a member" in error_msg.lower():
+                    return False, f"Bot is not a member of '{channel.title}'. Please add the bot to the channel first and make it an admin for fast import, or a regular member for standard import.", False
+                is_admin = False
+
             return True, channel, is_admin
         except Exception as e:
-            return False, f"Cannot access channel: {str(e)}", False
+            error_msg = str(e)
+            if "USER_NOT_PARTICIPANT" in error_msg:
+                return False, f"Cannot access channel '{channel_identifier}'. Make sure the bot is added to the channel as a member.", False
+            elif "No user has" in error_msg or "No chat" in error_msg:
+                return False, f"Channel '{channel_identifier}' not found. Please check the channel username or ID.", False
+            return False, f"Cannot access channel: {error_msg}", False
     
     async def get_channel_files(self, client: Client, channel_id: int, start_msg_id: int = None, end_msg_id: int = None):
         """Get all files from a channel within the specified range"""
