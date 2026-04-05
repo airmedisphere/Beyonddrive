@@ -70,56 +70,43 @@ class ByteStreamer:
         client = self.client
         logger.debug(f"Starting file stream: offset={offset}, parts={part_count}, chunk_size={chunk_size}")
 
+        # Calculate which chunk to start from (offset is in bytes, stream_media offset is in chunks)
+        chunk_offset = offset // chunk_size
+
         current_part = 1
-        current_offset = offset
-        total_bytes_to_read = (part_count - 1) * chunk_size + last_part_cut
+        chunk_count = 0
 
         try:
-            # Use Pyrogram's get_file method to stream chunks
-            # This method handles DC migration automatically
-            chunk_count = 0
-            bytes_remaining = total_bytes_to_read
+            # Use Pyrogram's stream_media which returns an async generator
+            # offset and limit are in chunks (not bytes), each chunk is max 1MB
+            async for chunk in client.stream_media(
+                file_id.file_id,
+                offset=chunk_offset,
+                limit=part_count
+            ):
+                if not chunk:
+                    logger.debug(f"Empty chunk received at part {current_part}")
+                    break
 
-            # Iterate through chunks
-            while current_part <= part_count and bytes_remaining > 0:
-                # Calculate how many bytes to read in this chunk
-                bytes_to_read = min(chunk_size, bytes_remaining)
+                chunk_count += 1
 
-                try:
-                    # Download chunk from Telegram
-                    chunk = await client.get_file(
-                        file_id.file_id,
-                        file_offset=current_offset,
-                        limit=bytes_to_read
-                    )
+                # Apply byte slicing based on position
+                if part_count == 1:
+                    # Single chunk: slice both start and end
+                    yield chunk[first_part_cut:last_part_cut]
+                elif current_part == 1:
+                    # First chunk: slice start only
+                    yield chunk[first_part_cut:]
+                elif current_part == part_count:
+                    # Last chunk: slice end only
+                    yield chunk[:last_part_cut]
+                else:
+                    # Middle chunk: yield full chunk
+                    yield chunk
 
-                    if not chunk:
-                        logger.debug(f"Empty chunk received at part {current_part}")
-                        break
+                current_part += 1
 
-                    chunk_count += 1
-
-                    # Apply byte slicing based on position
-                    if part_count == 1:
-                        # Single chunk: slice both start and end
-                        yield chunk[first_part_cut:last_part_cut]
-                    elif current_part == 1:
-                        # First chunk: slice start only
-                        yield chunk[first_part_cut:]
-                    elif current_part == part_count:
-                        # Last chunk: slice end only
-                        yield chunk[:last_part_cut]
-                    else:
-                        # Middle chunk: yield full chunk
-                        yield chunk
-
-                    current_part += 1
-                    bytes_read = len(chunk)
-                    current_offset += bytes_read
-                    bytes_remaining -= bytes_read
-
-                except Exception as chunk_error:
-                    logger.error(f"Error reading chunk {current_part}: {chunk_error}")
+                if current_part > part_count:
                     break
 
             logger.debug(f"Stream completed: yielded {chunk_count} chunks")
