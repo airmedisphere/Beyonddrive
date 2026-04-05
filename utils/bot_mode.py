@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import config
 from utils.logger import Logger
 from pathlib import Path
@@ -1041,7 +1041,7 @@ async def set_folder_handler(client: Client, message: Message):
 @main_bot.on_callback_query(
     filters.user(config.TELEGRAM_ADMIN_IDS) & filters.regex(r"set_folder_")
 )
-async def set_folder_callback(client: Client, callback_query):
+async def set_folder_callback(client: Client, callback_query: CallbackQuery):
     """
     Handles the callback query when a user selects a folder from the inline buttons.
     Sets the selected folder as the current default and saves it to a config file.
@@ -1219,11 +1219,15 @@ async def _handle_all_messages(client: Client, message: Message):
 async def start_bot_mode(d, b):
     """
     Initializes the bot mode, starts the main bot client, and sets the initial
-    default folder based on saved configuration or falls back to 'grammar'.
+    default folder based on saved configuration or searches for any available folder.
     """
     global DRIVE_DATA, BOT_MODE
     DRIVE_DATA = d
     BOT_MODE = b
+
+    if DRIVE_DATA is None:
+        logger.error("DRIVE_DATA is None, cannot start bot mode")
+        raise Exception("Drive data not initialized")
 
     logger.info("Starting Main Bot")
     await main_bot.start()
@@ -1231,50 +1235,95 @@ async def start_bot_mode(d, b):
     default_folder_path = None
     default_folder_name_to_use = None
 
+    # Try to load previously saved folder configuration
     if DEFAULT_FOLDER_CONFIG_FILE.exists():
         try:
             with open(DEFAULT_FOLDER_CONFIG_FILE, "r") as f:
                 config_data = json.load(f)
                 default_folder_path = config_data.get("current_folder")
                 default_folder_name_to_use = config_data.get("current_folder_name")
+
             if default_folder_path and default_folder_name_to_use:
-                BOT_MODE.set_folder(default_folder_path, default_folder_name_to_use)
-                logger.info(f"Loaded default folder from config: {default_folder_name_to_use} -> {default_folder_path}")
+                # Validate that the folder still exists in drive data
+                try:
+                    folder_exists = DRIVE_DATA.get_directory(default_folder_path)
+                    if folder_exists:
+                        BOT_MODE.set_folder(default_folder_path, default_folder_name_to_use)
+                        logger.info(f"Loaded default folder from config: {default_folder_name_to_use} -> {default_folder_path}")
+                    else:
+                        logger.warning(f"Previously configured folder no longer exists. Will search for a new default.")
+                        default_folder_path = None
+                        default_folder_name_to_use = None
+                except Exception as e:
+                    logger.warning(f"Error validating folder from config: {e}. Will search for a new default.")
+                    default_folder_path = None
+                    default_folder_name_to_use = None
             else:
-                logger.warning("Default folder config file found but data is incomplete. Falling back to 'grammar'.")
+                logger.warning("Default folder config file found but data is incomplete.")
                 default_folder_path = None
                 default_folder_name_to_use = None
         except (json.JSONDecodeError, KeyError) as e:
-            logger.error(f"Error reading default folder config file: {e}. Falling back to 'grammar'.")
+            logger.error(f"Error reading default folder config file: {e}.")
             default_folder_path = None
             default_folder_name_to_use = None
 
-    if default_folder_path and default_folder_name_to_use:
-        BOT_MODE.set_folder(default_folder_path, default_folder_name_to_use)
-        message_to_send = f"Main Bot Started -> TG Drive's Bot Mode Enabled with previously set folder: {default_folder_name_to_use}"
+    # If no valid folder from config, search for any available folder
+    if not (default_folder_path and default_folder_name_to_use):
+        logger.info("Searching for available folders in drive data...")
+        all_folders = []
+
+        try:
+            # Get root directory
+            root_dir = DRIVE_DATA.get_directory("/")
+
+            # Recursively collect all folders
+            def collect_folders(folder):
+                for item in folder.contents.values():
+                    if item.type == "folder" and not item.trash:
+                        all_folders.append(item)
+                        # Recursively search subfolders
+                        collect_folders(item)
+
+            collect_folders(root_dir)
+
+            if all_folders:
+                # Use the first available folder
+                first_folder = all_folders[0]
+                path_segments = [seg for seg in first_folder.path.strip("/").split("/") if seg]
+                folder_path = "/" + ("/".join(path_segments + [first_folder.id]))
+
+                BOT_MODE.set_folder(folder_path, first_folder.name)
+                logger.info(f"Default folder set to: {first_folder.name} -> {folder_path}")
+
+                # Save to config for next time
+                try:
+                    with open(DEFAULT_FOLDER_CONFIG_FILE, "w") as f:
+                        json.dump({"current_folder": folder_path, "current_folder_name": first_folder.name}, f)
+                    logger.info(f"Saved initial default folder to config.")
+                except Exception as e:
+                    logger.error(f"Failed to save initial default folder config: {e}")
+
+                message_to_send = f"Main Bot Started -> TG Drive's Bot Mode Enabled with default folder: {first_folder.name}"
+            else:
+                logger.warning(f"No folders found in drive. Setting root as default.")
+                BOT_MODE.set_folder("/", "/ (root directory)")
+
+                # Save root as default
+                try:
+                    with open(DEFAULT_FOLDER_CONFIG_FILE, "w") as f:
+                        json.dump({"current_folder": "/", "current_folder_name": "/ (root directory)"}, f)
+                    logger.info(f"Saved root directory as default folder to config.")
+                except Exception as e:
+                    logger.error(f"Failed to save default folder config: {e}")
+
+                message_to_send = "Main Bot Started -> TG Drive's Bot Mode Enabled. Using root directory. Use /set_folder to choose a different folder."
+        except Exception as e:
+            logger.error(f"Error searching for folders: {e}")
+            # Fallback to root directory
+            BOT_MODE.set_folder("/", "/ (root directory)")
+            message_to_send = "Main Bot Started -> TG Drive's Bot Mode Enabled. Using root directory due to error finding folders."
     else:
-        # Try to find any existing folder as default
-        all_folders = [item for item in DRIVE_DATA.drive_data.values() if item.type == "folder"]
-
-        if all_folders:
-            # Use the first available folder
-            first_folder = all_folders[0]
-            path_segments = [seg for seg in first_folder.path.strip("/").split("/") if seg]
-            folder_path = "/" + ("/".join(path_segments + [first_folder.id]))
-
-            BOT_MODE.set_folder(folder_path, first_folder.name)
-            logger.info(f"Default folder set to: {first_folder.name} -> {folder_path}")
-            try:
-                with open(DEFAULT_FOLDER_CONFIG_FILE, "w") as f:
-                    json.dump({"current_folder": folder_path, "current_folder_name": first_folder.name}, f)
-                logger.info(f"Saved initial default folder to config.")
-            except Exception as e:
-                logger.error(f"Failed to save initial default folder config: {e}")
-            message_to_send = f"Main Bot Started -> TG Drive's Bot Mode Enabled with default folder: {first_folder.name}"
-        else:
-            logger.warning(f"No folders found in drive. No default folder set initially.")
-            BOT_MODE.set_folder(None, "No default folder set. Please use /set_folder.")
-            message_to_send = "Main Bot Started -> TG Drive's Bot Mode Enabled. No folders found, please use /set_folder to choose one."
+        message_to_send = f"Main Bot Started -> TG Drive's Bot Mode Enabled with previously set folder: {default_folder_name_to_use}"
 
     await main_bot.send_message(
         config.STORAGE_CHANNEL,
