@@ -109,17 +109,31 @@ def search_by_tags(tags: list) -> list:
 
 
 # Startup Event
+def check_drive_initialized():
+    """Helper function to check if DRIVE_DATA is initialized"""
+    from utils.directoryHandler import DRIVE_DATA
+    if DRIVE_DATA is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Service unavailable: Drive not initialized. Please configure Telegram credentials in config.py"
+        )
+    return DRIVE_DATA
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Reset the cache directory, delete cache files
     reset_cache_dir()
 
     # Initialize the clients
-    await initialize_clients()
+    try:
+        await initialize_clients()
+    except Exception as e:
+        logger.error(f"Failed to initialize clients: {e}")
+        logger.warning("Server will start but file operations will be unavailable")
 
     # Start the website auto ping task
     asyncio.create_task(auto_ping_website())
-    
+
     # Start token cleanup task
     asyncio.create_task(cleanup_expired_tokens())
 
@@ -178,12 +192,19 @@ async def static_files(file_path):
 
 @app.get("/file")
 async def dl_file(request: Request):
-    from utils.directoryHandler import DRIVE_DATA
+    DRIVE_DATA = check_drive_initialized()
 
-    path = request.query_params["path"]
+    path = request.query_params.get("path")
+    if not path:
+        raise HTTPException(status_code=400, detail="Missing 'path' parameter")
+
     quality = request.query_params.get("quality", "original")  # original, 240p, 360p, 480p
-    
-    file = DRIVE_DATA.get_file(path)
+
+    try:
+        file = DRIVE_DATA.get_file(path)
+    except Exception as e:
+        logger.error(f"File not found at path '{path}': {e}")
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
     
     # Check if a specific quality is requested and available
     if quality != "original" and hasattr(file, 'encoded_versions') and file.encoded_versions:
@@ -286,7 +307,7 @@ async def check_password(request: Request):
 
 @app.post("/api/createNewFolder")
 async def api_new_folder(request: Request):
-    from utils.directoryHandler import DRIVE_DATA
+    DRIVE_DATA = check_drive_initialized()
 
     data = await request.json()
 
@@ -311,7 +332,7 @@ async def api_new_folder(request: Request):
 
 @app.post("/api/getDirectory")
 async def api_get_directory(request: Request):
-    from utils.directoryHandler import DRIVE_DATA
+    DRIVE_DATA = check_drive_initialized()
 
     data = await request.json()
 
@@ -455,7 +476,7 @@ async def cancel_upload(request: Request):
 
 @app.post("/api/renameFileFolder")
 async def rename_file_folder(request: Request):
-    from utils.directoryHandler import DRIVE_DATA
+    DRIVE_DATA = check_drive_initialized()
 
     data = await request.json()
 
@@ -469,7 +490,7 @@ async def rename_file_folder(request: Request):
 
 @app.post("/api/trashFileFolder")
 async def trash_file_folder(request: Request):
-    from utils.directoryHandler import DRIVE_DATA
+    DRIVE_DATA = check_drive_initialized()
 
     data = await request.json()
 
@@ -483,7 +504,7 @@ async def trash_file_folder(request: Request):
 
 @app.post("/api/deleteFileFolder")
 async def delete_file_folder(request: Request):
-    from utils.directoryHandler import DRIVE_DATA
+    DRIVE_DATA = check_drive_initialized()
 
     data = await request.json()
 
@@ -497,7 +518,7 @@ async def delete_file_folder(request: Request):
 
 @app.post("/api/moveFileFolder")
 async def move_file_folder(request: Request):
-    from utils.directoryHandler import DRIVE_DATA
+    DRIVE_DATA = check_drive_initialized()
 
     data = await request.json()
 
@@ -514,7 +535,7 @@ async def move_file_folder(request: Request):
 
 @app.post("/api/copyFileFolder")
 async def copy_file_folder(request: Request):
-    from utils.directoryHandler import DRIVE_DATA
+    DRIVE_DATA = check_drive_initialized()
 
     data = await request.json()
 
@@ -531,7 +552,7 @@ async def copy_file_folder(request: Request):
 
 @app.post("/api/getFolderTree")
 async def get_folder_tree(request: Request):
-    from utils.directoryHandler import DRIVE_DATA
+    DRIVE_DATA = check_drive_initialized()
 
     data = await request.json()
 

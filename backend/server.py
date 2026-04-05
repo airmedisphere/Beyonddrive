@@ -6,6 +6,7 @@ Proper HTTP Range Requests + 206 Partial Content
 from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import mimetypes
 from pathlib import Path
 from urllib.parse import quote
@@ -13,14 +14,28 @@ import math
 import asyncio
 
 from utils.logger import Logger
-from utils.clients import get_client
+from utils.clients import get_client, initialize_clients
 from utils.directoryHandler import DRIVE_DATA
 from utils.streamer.custom_dl import ByteStreamer
 from config import ADMIN_PASSWORD, STORAGE_CHANNEL, MAX_FILE_SIZE
 
 logger = Logger(__name__)
 
-app = FastAPI(title="TG Drive - Fixed Streaming")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize clients and DRIVE_DATA on startup"""
+    logger.info("Starting TG Drive backend server")
+    try:
+        await initialize_clients()
+        logger.info("Clients and DRIVE_DATA initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize clients: {e}")
+        logger.info("Starting in DEMO MODE - Telegram features disabled")
+        logger.info("Configure valid Telegram credentials to enable full functionality")
+    yield
+    logger.info("Shutting down TG Drive backend server")
+
+app = FastAPI(title="TG Drive - Fixed Streaming", lifespan=lifespan)
 
 # CORS
 app.add_middleware(
@@ -179,6 +194,9 @@ async def file_options():
 
 @app.head("/file")
 async def file_head(request: Request):
+    if DRIVE_DATA is None:
+        raise HTTPException(503, "Service unavailable: Drive not initialized")
+
     path = request.query_params.get("path")
     if not path:
         raise HTTPException(400, "path required")
@@ -194,13 +212,20 @@ async def file_head(request: Request):
                 "Accept-Ranges": "bytes",
             },
         )
-    except:
+    except Exception as e:
+        logger.error(f"File not found in HEAD request: {e}")
         raise HTTPException(404, "File not found")
 
 
 @app.get("/file")
 async def serve_file(request: Request):
     """Main file streaming endpoint"""
+    if DRIVE_DATA is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Service unavailable: Drive not initialized. Please configure Telegram credentials."
+        )
+
     path = request.query_params.get("path")
     quality = request.query_params.get("quality", "original")
 
@@ -209,8 +234,9 @@ async def serve_file(request: Request):
 
     try:
         file = DRIVE_DATA.get_file(path)
-    except:
-        raise HTTPException(404, "File not found")
+    except Exception as e:
+        logger.error(f"File not found at path '{path}': {e}")
+        raise HTTPException(404, f"File not found: {path}")
 
     # Quality switching support
     if quality != "original" and hasattr(file, "encoded_versions") and quality in file.encoded_versions:
