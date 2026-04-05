@@ -82,10 +82,48 @@ class ByteStreamer:
             Exception: If all session creation attempts fail
         """
         logger.info(f"Creating session for DC {dc_id} ({context}): test_mode={test_mode}, auth_key_len={len(auth_key) if auth_key else 0}")
+        logger.debug(f"Session class: {Session}, Module: {Session.__module__}")
 
-        # Attempt 1: Try with is_media=True (preferred for media sessions)
+        # Attempt 1: Using explicit KEYWORD arguments (KurimuzonAkuma fork requirement)
         try:
-            logger.debug(f"[DC {dc_id}] Attempt 1: Session(client, {dc_id}, auth_key, test_mode={test_mode}, is_media=True)")
+            logger.debug(f"[DC {dc_id}] Attempt 1: Session(client=client, dc_id={dc_id}, auth_key=..., test_mode={test_mode}, is_media=True)")
+            media_session = Session(
+                client=client,
+                dc_id=dc_id,
+                auth_key=auth_key,
+                test_mode=test_mode,
+                is_media=True,
+            )
+            await media_session.start()
+            logger.info(f"[DC {dc_id}] ✓ Session created successfully with KEYWORD args and is_media=True")
+            return media_session
+        except TypeError as e:
+            logger.warning(f"[DC {dc_id}] ✗ TypeError with keyword args and is_media=True: {e}")
+        except Exception as e:
+            logger.error(f"[DC {dc_id}] ✗ Failed with keyword args and is_media=True: {type(e).__name__}: {e}")
+            raise
+
+        # Attempt 2: Without is_media parameter (fallback)
+        try:
+            logger.debug(f"[DC {dc_id}] Attempt 2: Session(client=client, dc_id={dc_id}, auth_key=..., test_mode={test_mode})")
+            media_session = Session(
+                client=client,
+                dc_id=dc_id,
+                auth_key=auth_key,
+                test_mode=test_mode
+            )
+            await media_session.start()
+            logger.info(f"[DC {dc_id}] ✓ Session created successfully with KEYWORD args (no is_media)")
+            return media_session
+        except TypeError as e:
+            logger.error(f"[DC {dc_id}] ✗ TypeError with keyword args (no is_media): {e}")
+        except Exception as e:
+            logger.error(f"[DC {dc_id}] ✗ Failed with keyword args (no is_media): {type(e).__name__}: {e}")
+            raise
+
+        # Attempt 3: Positional arguments as last resort
+        try:
+            logger.debug(f"[DC {dc_id}] Attempt 3: Session(client, {dc_id}, auth_key, {test_mode}, is_media=True) [POSITIONAL]")
             media_session = Session(
                 client,
                 dc_id,
@@ -94,37 +132,20 @@ class ByteStreamer:
                 is_media=True,
             )
             await media_session.start()
-            logger.info(f"[DC {dc_id}] ✓ Session created successfully with is_media=True")
+            logger.info(f"[DC {dc_id}] ✓ Session created successfully with POSITIONAL args")
             return media_session
         except TypeError as e:
-            logger.warning(f"[DC {dc_id}] ✗ TypeError with is_media=True: {e}")
-        except Exception as e:
-            logger.error(f"[DC {dc_id}] ✗ Failed with is_media=True: {type(e).__name__}: {e}")
-            raise
-
-        # Attempt 2: Try without is_media parameter (fallback for older API)
-        try:
-            logger.debug(f"[DC {dc_id}] Attempt 2: Session(client, {dc_id}, auth_key, test_mode={test_mode})")
-            media_session = Session(
-                client,
-                dc_id,
-                auth_key,
-                test_mode
-            )
-            await media_session.start()
-            logger.info(f"[DC {dc_id}] ✓ Session created successfully without is_media parameter")
-            return media_session
-        except TypeError as e:
-            logger.error(f"[DC {dc_id}] ✗ TypeError without is_media: {e}")
+            logger.error(f"[DC {dc_id}] ✗ TypeError with positional args: {e}")
             error_msg = (
-                f"Failed to create Session for DC {dc_id}. "
-                f"Tried with and without is_media parameter. "
-                f"Error: {e}. "
-                f"This suggests a Pyrogram version mismatch or incorrect Session constructor signature."
+                f"CRITICAL: Failed to create Session for DC {dc_id} after 3 attempts. "
+                f"Tried: keyword args with is_media, keyword args without is_media, positional args. "
+                f"Last error: {e}. "
+                f"Session class: {Session.__module__}.{Session.__name__}. "
+                f"This indicates a Pyrogram API incompatibility."
             )
             raise TypeError(error_msg) from e
         except Exception as e:
-            logger.error(f"[DC {dc_id}] ✗ Failed without is_media: {type(e).__name__}: {e}")
+            logger.error(f"[DC {dc_id}] ✗ Failed with positional args: {type(e).__name__}: {e}")
             raise
 
     async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
