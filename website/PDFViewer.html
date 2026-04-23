@@ -14,13 +14,14 @@ body {
   background: #f1f5f9;
 }
 
+/* 🔥 COMPACT HEADER */
 .header {
   position: sticky;
   top: 0;
   background: white;
-  padding: 10px;
+  padding: 6px 8px;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   border-bottom: 1px solid #ddd;
   z-index: 1000;
@@ -28,23 +29,42 @@ body {
 }
 
 button {
-  padding: 6px 10px;
+  padding: 4px 8px;
+  font-size: 12px;
   border: 1px solid #ddd;
   background: white;
   border-radius: 6px;
   cursor: pointer;
 }
 
+/* 🔥 SMALL INPUT */
+#page-input {
+  width: 50px;
+  padding: 2px;
+  font-size: 12px;
+}
+
+/* 🔥 VIEWER USES FULL SPACE */
 #pdf-viewer {
-  height: calc(100vh - 60px);
+  height: calc(100vh - 45px);
   overflow: auto;
   scroll-behavior: smooth;
 }
 
+/* FULLSCREEN MODE */
+body.fullscreen .header {
+  display: none;
+}
+
+body.fullscreen #pdf-viewer {
+  height: 100vh;
+}
+
+/* PAGE STYLE */
 .page {
-  margin: 20px auto;
+  margin: 10px auto;
   background: white;
-  box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.15);
   border-radius: 8px;
 }
 
@@ -57,18 +77,19 @@ canvas {
   padding: 40px;
 }
 
-/* Fullscreen exit button */
+/* EXIT BUTTON */
 #exit-fullscreen {
   position: fixed;
-  top: 20px;
-  right: 20px;
+  top: 15px;
+  right: 15px;
   background: rgba(0,0,0,0.7);
   color: white;
-  padding: 10px 14px;
-  border-radius: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
   display: none;
   z-index: 2000;
   cursor: pointer;
+  font-size: 13px;
   transition: opacity 0.3s;
 }
 
@@ -83,7 +104,7 @@ canvas {
 
 <div class="header">
   <button id="prev">⬅</button>
-  <input id="page-input" type="number" value="1" style="width:60px;">
+  <input id="page-input" type="number" value="1">
   <span id="total">/ 0</span>
   <button id="next">➡</button>
 
@@ -91,8 +112,8 @@ canvas {
   <button id="zoom-out">-</button>
   <button id="fit">Fit</button>
 
-  <button id="download">Download</button>
-  <button id="fullscreen">Fullscreen</button>
+  <button id="download">⬇</button>
+  <button id="fullscreen">⛶</button>
 </div>
 
 <div id="pdf-viewer">
@@ -121,30 +142,23 @@ const pageRefs = {};
 const canvasRefs = {};
 const rendered = new Set();
 
-// INIT
 async function init() {
-  try {
-    pdfDoc = await pdfjsLib.getDocument(fileURL).promise;
-    totalPages = pdfDoc.numPages;
+  pdfDoc = await pdfjsLib.getDocument(fileURL).promise;
+  totalPages = pdfDoc.numPages;
 
-    document.getElementById('total').textContent = `/ ${totalPages}`;
+  document.getElementById('total').textContent = `/ ${totalPages}`;
 
-    const page = await pdfDoc.getPage(1);
-    const vp = page.getViewport({ scale: 1 });
-    scale = (viewer.clientWidth - 40) / vp.width;
+  const page = await pdfDoc.getPage(1);
+  const vp = page.getViewport({ scale: 1 });
+  scale = (viewer.clientWidth - 20) / vp.width;
 
-    loading.style.display = 'none';
+  loading.style.display = 'none';
 
-    createPages();
-    observePages();
-    trackScroll();
-
-  } catch (e) {
-    loading.innerHTML = "Error loading PDF: " + e.message;
-  }
+  createPages();
+  observePages();
+  trackScroll();
 }
 
-// CREATE PAGES
 function createPages() {
   const wrapper = document.createElement('div');
 
@@ -165,7 +179,6 @@ function createPages() {
   viewer.appendChild(wrapper);
 }
 
-// LAZY LOAD
 function observePages() {
   const observer = new IntersectionObserver(entries => {
     entries.forEach(entry => {
@@ -181,7 +194,6 @@ function observePages() {
   Object.values(pageRefs).forEach(el => observer.observe(el));
 }
 
-// RENDER PAGE (NO FLIP FIXED)
 async function renderPage(p) {
   if (rendered.has(p)) return;
 
@@ -204,15 +216,11 @@ async function renderPage(p) {
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  await page.render({
-    canvasContext: ctx,
-    viewport
-  }).promise;
+  await page.render({ canvasContext: ctx, viewport }).promise;
 
   rendered.add(p);
 }
 
-// SCROLL TRACK
 function trackScroll() {
   viewer.addEventListener('scroll', () => {
     const mid = viewer.scrollTop + viewer.clientHeight / 2;
@@ -231,7 +239,6 @@ function trackScroll() {
   });
 }
 
-// NAVIGATION
 function goToPage(p) {
   const el = pageRefs[p];
   if (!el) return;
@@ -242,68 +249,54 @@ function goToPage(p) {
   });
 }
 
-document.getElementById('prev').onclick = () => {
-  if (currentPage > 1) goToPage(currentPage - 1);
-};
-
-document.getElementById('next').onclick = () => {
-  if (currentPage < totalPages) goToPage(currentPage + 1);
-};
+document.getElementById('prev').onclick = () => currentPage > 1 && goToPage(currentPage - 1);
+document.getElementById('next').onclick = () => currentPage < totalPages && goToPage(currentPage + 1);
 
 document.getElementById('page-input').onchange = (e) => {
   const p = parseInt(e.target.value);
   if (p >= 1 && p <= totalPages) goToPage(p);
 };
 
-// ZOOM
 function rerender() {
   rendered.clear();
   Object.keys(canvasRefs).forEach(p => renderPage(parseInt(p)));
 }
 
-document.getElementById('zoom-in').onclick = () => {
-  scale = Math.min(scale + 0.25, 4);
-  rerender();
-};
-
-document.getElementById('zoom-out').onclick = () => {
-  scale = Math.max(scale - 0.25, 0.5);
-  rerender();
-};
+document.getElementById('zoom-in').onclick = () => { scale = Math.min(scale + 0.25, 4); rerender(); };
+document.getElementById('zoom-out').onclick = () => { scale = Math.max(scale - 0.25, 0.5); rerender(); };
 
 document.getElementById('fit').onclick = async () => {
   const page = await pdfDoc.getPage(1);
   const vp = page.getViewport({ scale: 1 });
-
-  scale = (viewer.clientWidth - 40) / vp.width;
+  scale = (viewer.clientWidth - 20) / vp.width;
   rerender();
 };
 
-// DOWNLOAD
 document.getElementById('download').onclick = () => {
-  const link = document.createElement('a');
-  link.href = fileURL;
-  link.download = path?.split('/').pop() || 'document.pdf';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  const a = document.createElement('a');
+  a.href = fileURL;
+  a.download = path?.split('/').pop() || 'document.pdf';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 };
 
-// FULLSCREEN
+/* 🔥 FULLSCREEN (FIXED PROPERLY) */
 const fsBtn = document.getElementById('fullscreen');
 const exitBtn = document.getElementById('exit-fullscreen');
 
 let hideTimeout;
 
-fsBtn.onclick = () => {
-  if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen();
-    exitBtn.style.display = 'block';
-    showExit();
-  }
+fsBtn.onclick = async () => {
+  await document.documentElement.requestFullscreen();
+  document.body.classList.add('fullscreen');
+  exitBtn.style.display = 'block';
+  showExit();
 };
 
-exitBtn.onclick = () => document.exitFullscreen();
+exitBtn.onclick = async () => {
+  await document.exitFullscreen();
+};
 
 function showExit() {
   exitBtn.classList.remove('hidden');
@@ -319,11 +312,11 @@ document.addEventListener('click', () => {
 
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement) {
+    document.body.classList.remove('fullscreen');
     exitBtn.style.display = 'none';
   }
 });
 
-// INIT
 window.onload = init;
 </script>
 
