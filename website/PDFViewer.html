@@ -1,71 +1,80 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PDF Notes Viewer</title>
+<title>PDF Viewer</title>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
 <style>
-:root{
-  --bg:#eef2f7;
-  --panel:#ffffff;
-  --border:#e5e7eb;
-  --text:#111827;
-  --accent:#2563eb;
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f1f5f9;
 }
 
-*{box-sizing:border-box}
-body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto;background:var(--bg);color:var(--text)}
-
-.header{
-  position:sticky;top:0;z-index:1000;
-  display:flex;flex-wrap:wrap;gap:8px;align-items:center;
-  padding:10px;border-bottom:1px solid var(--border);background:var(--panel);
+.header {
+  position: sticky;
+  top: 0;
+  background: white;
+  padding: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border-bottom: 1px solid #ddd;
+  z-index: 1000;
+  flex-wrap: wrap;
 }
 
-button, select, input[type="color"]{
-  border:1px solid var(--border);
-  background:#fff;border-radius:8px;
-  padding:6px 10px;cursor:pointer;
-}
-button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
-
-#pdf-viewer{
-  height:calc(100vh - 70px);
-  overflow:auto;scroll-behavior:smooth;
-  padding:10px 6px;
+button {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
 }
 
-.page{
-  position:relative;
-  margin:18px auto;
-  background:#fff;border-radius:10px;
-  box-shadow:0 12px 30px rgba(0,0,0,.18);
+#pdf-viewer {
+  height: calc(100vh - 60px);
+  overflow: auto;
+  scroll-behavior: smooth;
 }
 
-.page canvas.pdf{
-  display:block;border-radius:10px;
+.page {
+  margin: 20px auto;
+  background: white;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+  border-radius: 8px;
 }
 
-.page canvas.draw{
-  position:absolute;left:0;top:0;
-  pointer-events:none; /* enabled only in draw mode */
+canvas {
+  display: block;
 }
 
-.badge{
-  position:absolute;right:8px;bottom:8px;
-  background:rgba(0,0,0,.5);color:#fff;
-  padding:2px 6px;border-radius:6px;font-size:11px;
+.loading {
+  text-align: center;
+  padding: 40px;
 }
 
-.loading{padding:40px;text-align:center}
-.sep{width:1px;height:22px;background:var(--border);margin:0 4px}
+/* Fullscreen exit button */
+#exit-fullscreen {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: rgba(0,0,0,0.7);
+  color: white;
+  padding: 10px 14px;
+  border-radius: 8px;
+  display: none;
+  z-index: 2000;
+  cursor: pointer;
+  transition: opacity 0.3s;
+}
 
-@media (max-width:640px){
-  .header{gap:6px}
+#exit-fullscreen.hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 </style>
 </head>
@@ -73,385 +82,248 @@ button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 <body>
 
 <div class="header">
-  <!-- Nav -->
   <button id="prev">⬅</button>
   <input id="page-input" type="number" value="1" style="width:60px;">
   <span id="total">/ 0</span>
   <button id="next">➡</button>
 
-  <div class="sep"></div>
-
-  <!-- Zoom -->
   <button id="zoom-in">+</button>
   <button id="zoom-out">-</button>
   <button id="fit">Fit</button>
 
-  <div class="sep"></div>
-
-  <!-- Tools -->
-  <button id="tool-pen" class="primary">Pen</button>
-  <button id="tool-highlighter">Highlighter</button>
-  <button id="tool-eraser">Eraser</button>
-
-  <input type="color" id="color" value="#ff0000" title="Color">
-  <select id="size">
-    <option value="2">Thin</option>
-    <option value="4" selected>Medium</option>
-    <option value="8">Thick</option>
-  </select>
-
-  <button id="undo">Undo</button>
-  <button id="redo">Redo</button>
-  <button id="clear">Clear Page</button>
-
-  <div class="sep"></div>
-
-  <!-- Download -->
   <button id="download">Download</button>
+  <button id="fullscreen">Fullscreen</button>
 </div>
 
 <div id="pdf-viewer">
-  <div id="loading" class="loading">Loading PDF…</div>
+  <div class="loading" id="loading">Loading PDF...</div>
 </div>
+
+<div id="exit-fullscreen">Exit</div>
 
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-// ====== FILE ======
 const urlParams = new URLSearchParams(window.location.search);
 const path = urlParams.get('path');
-const fileURL = `/file?path=${encodeURIComponent(path || '')}`;
-const fileKey = `pdfNotes:${path || 'unknown'}`;
+const fileURL = `/file?path=${encodeURIComponent(path)}`;
 
-// ====== STATE ======
-let pdfDoc=null, totalPages=0, currentPage=1, scale=1.2;
+let pdfDoc = null;
+let totalPages = 0;
+let currentPage = 1;
+let scale = 1.2;
+
 const viewer = document.getElementById('pdf-viewer');
 const loading = document.getElementById('loading');
 
-const pageRefs = {}, pdfCanvasRefs = {}, drawCanvasRefs = {};
+const pageRefs = {};
+const canvasRefs = {};
 const rendered = new Set();
 
-// drawing state per page
-const strokesByPage = {}; // page -> [{tool,color,size,points:[{x,y}]}]
-const redoByPage = {};    // page -> stack
-let currentTool = 'pen';  // 'pen' | 'highlighter' | 'eraser'
-let currentColor = '#ff0000';
-let currentSize = 4;
-
-// ====== INIT ======
-async function init(){
-  try{
-    const task = pdfjsLib.getDocument(fileURL);
-    pdfDoc = await task.promise;
+// INIT
+async function init() {
+  try {
+    pdfDoc = await pdfjsLib.getDocument(fileURL).promise;
     totalPages = pdfDoc.numPages;
+
     document.getElementById('total').textContent = `/ ${totalPages}`;
 
-    // fit width initially
     const page = await pdfDoc.getPage(1);
-    const vp = page.getViewport({ scale:1 });
-    scale = (viewer.clientWidth - 24) / vp.width;
+    const vp = page.getViewport({ scale: 1 });
+    scale = (viewer.clientWidth - 40) / vp.width;
 
-    // load saved notes
-    loadNotes();
+    loading.style.display = 'none';
 
-    loading.style.display='none';
     createPages();
     observePages();
     trackScroll();
-  }catch(e){
-    loading.textContent = 'Error: ' + e.message;
+
+  } catch (e) {
+    loading.innerHTML = "Error loading PDF: " + e.message;
   }
 }
 
-// ====== CREATE PAGES ======
-function createPages(){
-  const wrap = document.createElement('div');
-  for(let i=1;i<=totalPages;i++){
-    const pageDiv = document.createElement('div');
-    pageDiv.className='page';
-    pageDiv.dataset.page=i;
+// CREATE PAGES
+function createPages() {
+  const wrapper = document.createElement('div');
 
-    const pdfCanvas = document.createElement('canvas');
-    pdfCanvas.className='pdf';
+  for (let i = 1; i <= totalPages; i++) {
+    const div = document.createElement('div');
+    div.className = 'page';
+    div.dataset.page = i;
 
-    const drawCanvas = document.createElement('canvas');
-    drawCanvas.className='draw';
+    const canvas = document.createElement('canvas');
 
-    const badge = document.createElement('div');
-    badge.className='badge';
-    badge.textContent = i;
+    div.appendChild(canvas);
+    wrapper.appendChild(div);
 
-    pageDiv.appendChild(pdfCanvas);
-    pageDiv.appendChild(drawCanvas);
-    pageDiv.appendChild(badge);
-    wrap.appendChild(pageDiv);
-
-    pageRefs[i]=pageDiv;
-    pdfCanvasRefs[i]=pdfCanvas;
-    drawCanvasRefs[i]=drawCanvas;
-
-    enableDrawing(drawCanvas, i);
+    pageRefs[i] = div;
+    canvasRefs[i] = canvas;
   }
-  viewer.appendChild(wrap);
+
+  viewer.appendChild(wrapper);
 }
 
-// ====== OBSERVER (LAZY) ======
-function observePages(){
-  const obs = new IntersectionObserver(entries=>{
-    entries.forEach(e=>{
-      if(e.isIntersecting){
-        const p = +e.target.dataset.page;
+// LAZY LOAD
+function observePages() {
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const p = parseInt(entry.target.dataset.page);
         renderPage(p);
-        if(p>1) renderPage(p-1);
-        if(p<totalPages) renderPage(p+1);
+        if (p > 1) renderPage(p - 1);
+        if (p < totalPages) renderPage(p + 1);
       }
     });
-  }, {root:viewer, rootMargin:'200px'});
-  Object.values(pageRefs).forEach(el=>obs.observe(el));
+  }, { root: viewer, rootMargin: '200px' });
+
+  Object.values(pageRefs).forEach(el => observer.observe(el));
 }
 
-// ====== RENDER PDF (ROTATION FIX + HIDPI) ======
-async function renderPage(p){
-  if(rendered.has(p)) return;
+// RENDER PAGE (NO FLIP FIXED)
+async function renderPage(p) {
+  if (rendered.has(p)) return;
+
   const page = await pdfDoc.getPage(p);
 
   const viewport = page.getViewport({
-    scale,
+    scale: scale,
     rotation: (page.rotate + 360) % 360
   });
 
-  const canvas = pdfCanvasRefs[p];
+  const canvas = canvasRefs[p];
   const ctx = canvas.getContext('2d');
+
   const dpr = window.devicePixelRatio || 1;
 
   canvas.width = viewport.width * dpr;
   canvas.height = viewport.height * dpr;
-  canvas.style.width = viewport.width + 'px';
-  canvas.style.height = viewport.height + 'px';
-  ctx.setTransform(dpr,0,0,dpr,0,0);
+  canvas.style.width = viewport.width + "px";
+  canvas.style.height = viewport.height + "px";
 
-  // match draw canvas size
-  const dcanvas = drawCanvasRefs[p];
-  dcanvas.width = canvas.width;
-  dcanvas.height = canvas.height;
-  dcanvas.style.width = canvas.style.width;
-  dcanvas.style.height = canvas.style.height;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  await page.render({
+    canvasContext: ctx,
+    viewport
+  }).promise;
+
   rendered.add(p);
-
-  // redraw saved strokes
-  redrawPage(p);
 }
 
-// ====== SCROLL → CURRENT PAGE ======
-function trackScroll(){
-  viewer.addEventListener('scroll', ()=>{
-    const mid = viewer.scrollTop + viewer.clientHeight/2;
-    for(let i=1;i<=totalPages;i++){
+// SCROLL TRACK
+function trackScroll() {
+  viewer.addEventListener('scroll', () => {
+    const mid = viewer.scrollTop + viewer.clientHeight / 2;
+
+    for (let i = 1; i <= totalPages; i++) {
       const el = pageRefs[i];
-      if(el && el.offsetTop<=mid && el.offsetTop+el.offsetHeight>=mid){
-        currentPage=i;
-        document.getElementById('page-input').value=i;
+      if (!el) continue;
+
+      if (el.offsetTop <= mid &&
+          el.offsetTop + el.offsetHeight >= mid) {
+        currentPage = i;
+        document.getElementById('page-input').value = i;
         break;
       }
     }
-  }, {passive:true});
-}
-
-// ====== NAV ======
-function goToPage(p){
-  const el = pageRefs[p];
-  if(!el) return;
-  viewer.scrollTo({ top: el.offsetTop-10, behavior:'smooth' });
-}
-document.getElementById('prev').onclick=()=>{ if(currentPage>1) goToPage(currentPage-1); };
-document.getElementById('next').onclick=()=>{ if(currentPage<totalPages) goToPage(currentPage+1); };
-document.getElementById('page-input').onchange=(e)=>{
-  const p = parseInt(e.target.value);
-  if(p>=1 && p<=totalPages) goToPage(p);
-};
-
-// ====== ZOOM ======
-function rerenderAll(){
-  rendered.clear();
-  Object.keys(pdfCanvasRefs).forEach(p=>renderPage(+p));
-}
-document.getElementById('zoom-in').onclick=()=>{ scale=Math.min(scale+0.25,4); rerenderAll(); };
-document.getElementById('zoom-out').onclick=()=>{ scale=Math.max(scale-0.25,0.5); rerenderAll(); };
-document.getElementById('fit').onclick=async ()=>{
-  const page = await pdfDoc.getPage(1);
-  const vp = page.getViewport({ scale:1 });
-  scale = (viewer.clientWidth - 24) / vp.width;
-  rerenderAll();
-};
-
-// ====== DOWNLOAD ======
-document.getElementById('download').onclick=()=>{
-  const a=document.createElement('a');
-  a.href=fileURL;
-  a.download=(path?.split('/').pop()) || 'document.pdf';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-};
-
-// ====== TOOLS ======
-const setTool = (t)=>{
-  currentTool=t;
-  document.getElementById('tool-pen').classList.toggle('primary', t==='pen');
-  document.getElementById('tool-highlighter').classList.toggle('primary', t==='highlighter');
-  document.getElementById('tool-eraser').classList.toggle('primary', t==='eraser');
-};
-document.getElementById('tool-pen').onclick=()=>setTool('pen');
-document.getElementById('tool-highlighter').onclick=()=>setTool('highlighter');
-document.getElementById('tool-eraser').onclick=()=>setTool('eraser');
-
-document.getElementById('color').onchange=(e)=> currentColor = e.target.value;
-document.getElementById('size').onchange=(e)=> currentSize = parseInt(e.target.value);
-
-// ====== DRAWING ======
-function enableDrawing(canvas, pageNum){
-  const ctx = canvas.getContext('2d');
-  let drawing=false, stroke=null;
-
-  const getPos = (e)=>{
-    const rect = canvas.getBoundingClientRect();
-    const x = ( (e.touches? e.touches[0].clientX : e.clientX) - rect.left ) * (canvas.width/rect.width);
-    const y = ( (e.touches? e.touches[0].clientY : e.clientY) - rect.top ) * (canvas.height/rect.height);
-    return {x,y};
-  };
-
-  const start = (e)=>{
-    if(currentTool==='eraser'){
-      eraseAt(pageNum, getPos(e));
-      return;
-    }
-    drawing=true;
-    canvas.style.pointerEvents='auto';
-    stroke = {
-      tool: currentTool,
-      color: currentColor,
-      size: currentSize,
-      points: [ getPos(e) ]
-    };
-    (strokesByPage[pageNum] ||= []).push(stroke);
-    redoByPage[pageNum] = []; // clear redo stack
-  };
-
-  const move = (e)=>{
-    if(!drawing || !stroke) return;
-    const p = getPos(e);
-    stroke.points.push(p);
-    drawStrokeSegment(ctx, stroke, true);
-  };
-
-  const end = ()=>{
-    drawing=false;
-    saveNotes();
-  };
-
-  canvas.addEventListener('mousedown', start);
-  canvas.addEventListener('mousemove', move);
-  window.addEventListener('mouseup', end);
-
-  canvas.addEventListener('touchstart', (e)=>{ e.preventDefault(); start(e); }, {passive:false});
-  canvas.addEventListener('touchmove', (e)=>{ e.preventDefault(); move(e); }, {passive:false});
-  window.addEventListener('touchend', end);
-}
-
-function drawStrokeSegment(ctx, stroke, incremental=false){
-  const pts = stroke.points;
-  if(pts.length<2) return;
-
-  ctx.lineCap='round';
-  ctx.lineJoin='round';
-  ctx.globalCompositeOperation = 'source-over';
-
-  if(stroke.tool==='highlighter'){
-    ctx.globalAlpha = 0.3;
-  } else {
-    ctx.globalAlpha = 1;
-  }
-
-  ctx.strokeStyle = stroke.color;
-  ctx.lineWidth = stroke.size;
-
-  const start = incremental ? pts.length-2 : 0;
-  for(let i=start;i<pts.length-1;i++){
-    ctx.beginPath();
-    ctx.moveTo(pts[i].x, pts[i].y);
-    ctx.lineTo(pts[i+1].x, pts[i+1].y);
-    ctx.stroke();
-  }
-}
-
-function redrawPage(pageNum){
-  const canvas = drawCanvasRefs[pageNum];
-  if(!canvas) return;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-
-  const strokes = strokesByPage[pageNum] || [];
-  strokes.forEach(s => drawStrokeSegment(ctx, s, false));
-}
-
-// simple eraser: remove strokes near point
-function eraseAt(pageNum, pos){
-  const strokes = strokesByPage[pageNum] || [];
-  const threshold = 12 * (window.devicePixelRatio||1);
-  const keep = strokes.filter(s=>{
-    return !s.points.some(pt => Math.hypot(pt.x-pos.x, pt.y-pos.y) < threshold);
   });
-  if(keep.length !== strokes.length){
-    strokesByPage[pageNum] = keep;
-    redrawPage(pageNum);
-    saveNotes();
+}
+
+// NAVIGATION
+function goToPage(p) {
+  const el = pageRefs[p];
+  if (!el) return;
+
+  viewer.scrollTo({
+    top: el.offsetTop - 10,
+    behavior: 'smooth'
+  });
+}
+
+document.getElementById('prev').onclick = () => {
+  if (currentPage > 1) goToPage(currentPage - 1);
+};
+
+document.getElementById('next').onclick = () => {
+  if (currentPage < totalPages) goToPage(currentPage + 1);
+};
+
+document.getElementById('page-input').onchange = (e) => {
+  const p = parseInt(e.target.value);
+  if (p >= 1 && p <= totalPages) goToPage(p);
+};
+
+// ZOOM
+function rerender() {
+  rendered.clear();
+  Object.keys(canvasRefs).forEach(p => renderPage(parseInt(p)));
+}
+
+document.getElementById('zoom-in').onclick = () => {
+  scale = Math.min(scale + 0.25, 4);
+  rerender();
+};
+
+document.getElementById('zoom-out').onclick = () => {
+  scale = Math.max(scale - 0.25, 0.5);
+  rerender();
+};
+
+document.getElementById('fit').onclick = async () => {
+  const page = await pdfDoc.getPage(1);
+  const vp = page.getViewport({ scale: 1 });
+
+  scale = (viewer.clientWidth - 40) / vp.width;
+  rerender();
+};
+
+// DOWNLOAD
+document.getElementById('download').onclick = () => {
+  const link = document.createElement('a');
+  link.href = fileURL;
+  link.download = path?.split('/').pop() || 'document.pdf';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+// FULLSCREEN
+const fsBtn = document.getElementById('fullscreen');
+const exitBtn = document.getElementById('exit-fullscreen');
+
+let hideTimeout;
+
+fsBtn.onclick = () => {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen();
+    exitBtn.style.display = 'block';
+    showExit();
   }
-}
-
-// ====== UNDO / REDO / CLEAR ======
-document.getElementById('undo').onclick=()=>{
-  const s = strokesByPage[currentPage] || [];
-  if(!s.length) return;
-  const r = redoByPage[currentPage] ||= [];
-  r.push(s.pop());
-  redrawPage(currentPage);
-  saveNotes();
-};
-document.getElementById('redo').onclick=()=>{
-  const r = redoByPage[currentPage] || [];
-  if(!r.length) return;
-  const s = strokesByPage[currentPage] ||= [];
-  s.push(r.pop());
-  redrawPage(currentPage);
-  saveNotes();
-};
-document.getElementById('clear').onclick=()=>{
-  strokesByPage[currentPage] = [];
-  redoByPage[currentPage] = [];
-  redrawPage(currentPage);
-  saveNotes();
 };
 
-// ====== PERSISTENCE ======
-function saveNotes(){
-  try{
-    localStorage.setItem(fileKey, JSON.stringify(strokesByPage));
-  }catch{}
-}
-function loadNotes(){
-  try{
-    const raw = localStorage.getItem(fileKey);
-    if(raw){
-      const data = JSON.parse(raw);
-      Object.assign(strokesByPage, data);
-    }
-  }catch{}
+exitBtn.onclick = () => document.exitFullscreen();
+
+function showExit() {
+  exitBtn.classList.remove('hidden');
+  clearTimeout(hideTimeout);
+  hideTimeout = setTimeout(() => {
+    exitBtn.classList.add('hidden');
+  }, 2000);
 }
 
-// ====== START ======
+document.addEventListener('click', () => {
+  if (document.fullscreenElement) showExit();
+});
+
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) {
+    exitBtn.style.display = 'none';
+  }
+});
+
+// INIT
 window.onload = init;
 </script>
 
