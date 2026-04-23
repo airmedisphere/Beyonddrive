@@ -14,18 +14,17 @@ body {
   background: #f1f5f9;
 }
 
-/* 🔥 COMPACT HEADER */
+/* Compact Header */
 .header {
   position: sticky;
   top: 0;
   background: white;
-  padding: 6px 8px;
+  padding: 6px;
   display: flex;
   gap: 6px;
   align-items: center;
   border-bottom: 1px solid #ddd;
   z-index: 1000;
-  flex-wrap: wrap;
 }
 
 button {
@@ -37,21 +36,19 @@ button {
   cursor: pointer;
 }
 
-/* 🔥 SMALL INPUT */
 #page-input {
   width: 50px;
-  padding: 2px;
   font-size: 12px;
 }
 
-/* 🔥 VIEWER USES FULL SPACE */
+/* Viewer */
 #pdf-viewer {
   height: calc(100vh - 45px);
   overflow: auto;
   scroll-behavior: smooth;
 }
 
-/* FULLSCREEN MODE */
+/* Fullscreen */
 body.fullscreen .header {
   display: none;
 }
@@ -60,7 +57,7 @@ body.fullscreen #pdf-viewer {
   height: 100vh;
 }
 
-/* PAGE STYLE */
+/* Pages */
 .page {
   margin: 10px auto;
   background: white;
@@ -72,12 +69,7 @@ canvas {
   display: block;
 }
 
-.loading {
-  text-align: center;
-  padding: 40px;
-}
-
-/* EXIT BUTTON */
+/* Exit button */
 #exit-fullscreen {
   position: fixed;
   top: 15px;
@@ -89,7 +81,6 @@ canvas {
   display: none;
   z-index: 2000;
   cursor: pointer;
-  font-size: 13px;
   transition: opacity 0.3s;
 }
 
@@ -117,7 +108,7 @@ canvas {
 </div>
 
 <div id="pdf-viewer">
-  <div class="loading" id="loading">Loading PDF...</div>
+  <div id="loading" style="padding:40px;text-align:center;">Loading PDF...</div>
 </div>
 
 <div id="exit-fullscreen">Exit</div>
@@ -130,10 +121,7 @@ const urlParams = new URLSearchParams(window.location.search);
 const path = urlParams.get('path');
 const fileURL = `/file?path=${encodeURIComponent(path)}`;
 
-let pdfDoc = null;
-let totalPages = 0;
-let currentPage = 1;
-let scale = 1.2;
+let pdfDoc, totalPages, currentPage = 1, scale = 1.2;
 
 const viewer = document.getElementById('pdf-viewer');
 const loading = document.getElementById('loading');
@@ -142,6 +130,7 @@ const pageRefs = {};
 const canvasRefs = {};
 const rendered = new Set();
 
+/* INIT */
 async function init() {
   pdfDoc = await pdfjsLib.getDocument(fileURL).promise;
   totalPages = pdfDoc.numPages;
@@ -159,8 +148,9 @@ async function init() {
   trackScroll();
 }
 
+/* CREATE PAGES */
 function createPages() {
-  const wrapper = document.createElement('div');
+  const wrap = document.createElement('div');
 
   for (let i = 1; i <= totalPages; i++) {
     const div = document.createElement('div');
@@ -170,20 +160,21 @@ function createPages() {
     const canvas = document.createElement('canvas');
 
     div.appendChild(canvas);
-    wrapper.appendChild(div);
+    wrap.appendChild(div);
 
     pageRefs[i] = div;
     canvasRefs[i] = canvas;
   }
 
-  viewer.appendChild(wrapper);
+  viewer.appendChild(wrap);
 }
 
+/* LAZY LOAD */
 function observePages() {
   const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        const p = parseInt(entry.target.dataset.page);
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        const p = parseInt(e.target.dataset.page);
         renderPage(p);
         if (p > 1) renderPage(p - 1);
         if (p < totalPages) renderPage(p + 1);
@@ -194,6 +185,7 @@ function observePages() {
   Object.values(pageRefs).forEach(el => observer.observe(el));
 }
 
+/* RENDER (NO FLIP) */
 async function renderPage(p) {
   if (rendered.has(p)) return;
 
@@ -221,16 +213,14 @@ async function renderPage(p) {
   rendered.add(p);
 }
 
+/* SCROLL TRACK */
 function trackScroll() {
   viewer.addEventListener('scroll', () => {
     const mid = viewer.scrollTop + viewer.clientHeight / 2;
 
     for (let i = 1; i <= totalPages; i++) {
       const el = pageRefs[i];
-      if (!el) continue;
-
-      if (el.offsetTop <= mid &&
-          el.offsetTop + el.offsetHeight >= mid) {
+      if (el && el.offsetTop <= mid && el.offsetTop + el.offsetHeight >= mid) {
         currentPage = i;
         document.getElementById('page-input').value = i;
         break;
@@ -239,40 +229,39 @@ function trackScroll() {
   });
 }
 
+/* NAVIGATION */
 function goToPage(p) {
   const el = pageRefs[p];
   if (!el) return;
-
-  viewer.scrollTo({
-    top: el.offsetTop - 10,
-    behavior: 'smooth'
-  });
+  viewer.scrollTo({ top: el.offsetTop - 10, behavior: 'smooth' });
 }
 
-document.getElementById('prev').onclick = () => currentPage > 1 && goToPage(currentPage - 1);
-document.getElementById('next').onclick = () => currentPage < totalPages && goToPage(currentPage + 1);
+prev.onclick = () => currentPage > 1 && goToPage(currentPage - 1);
+next.onclick = () => currentPage < totalPages && goToPage(currentPage + 1);
 
-document.getElementById('page-input').onchange = (e) => {
+page-input.onchange = (e) => {
   const p = parseInt(e.target.value);
   if (p >= 1 && p <= totalPages) goToPage(p);
 };
 
+/* ZOOM */
 function rerender() {
   rendered.clear();
   Object.keys(canvasRefs).forEach(p => renderPage(parseInt(p)));
 }
 
-document.getElementById('zoom-in').onclick = () => { scale = Math.min(scale + 0.25, 4); rerender(); };
-document.getElementById('zoom-out').onclick = () => { scale = Math.max(scale - 0.25, 0.5); rerender(); };
+zoom-in.onclick = () => { scale = Math.min(scale + 0.25, 4); rerender(); };
+zoom-out.onclick = () => { scale = Math.max(scale - 0.25, 0.5); rerender(); };
 
-document.getElementById('fit').onclick = async () => {
+fit.onclick = async () => {
   const page = await pdfDoc.getPage(1);
   const vp = page.getViewport({ scale: 1 });
   scale = (viewer.clientWidth - 20) / vp.width;
   rerender();
 };
 
-document.getElementById('download').onclick = () => {
+/* DOWNLOAD */
+download.onclick = () => {
   const a = document.createElement('a');
   a.href = fileURL;
   a.download = path?.split('/').pop() || 'document.pdf';
@@ -281,7 +270,7 @@ document.getElementById('download').onclick = () => {
   a.remove();
 };
 
-/* 🔥 FULLSCREEN (FIXED PROPERLY) */
+/* FULLSCREEN */
 const fsBtn = document.getElementById('fullscreen');
 const exitBtn = document.getElementById('exit-fullscreen');
 
@@ -294,9 +283,7 @@ fsBtn.onclick = async () => {
   showExit();
 };
 
-exitBtn.onclick = async () => {
-  await document.exitFullscreen();
-};
+exitBtn.onclick = () => document.exitFullscreen();
 
 function showExit() {
   exitBtn.classList.remove('hidden');
@@ -315,6 +302,44 @@ document.addEventListener('fullscreenchange', () => {
     document.body.classList.remove('fullscreen');
     exitBtn.style.display = 'none';
   }
+});
+
+/* 🔥 PINCH ZOOM */
+let startDist = null;
+let startScale = scale;
+
+function getDistance(t) {
+  return Math.hypot(
+    t[0].clientX - t[1].clientX,
+    t[0].clientY - t[1].clientY
+  );
+}
+
+viewer.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 2) {
+    startDist = getDistance(e.touches);
+    startScale = scale;
+  }
+}, { passive: true });
+
+viewer.addEventListener('touchmove', (e) => {
+  if (e.touches.length === 2 && startDist) {
+    e.preventDefault();
+
+    const dist = getDistance(e.touches);
+    let newScale = startScale * (dist / startDist);
+
+    newScale = Math.max(0.5, Math.min(newScale, 4));
+
+    if (Math.abs(newScale - scale) > 0.02) {
+      scale = newScale;
+      rerender();
+    }
+  }
+}, { passive: false });
+
+viewer.addEventListener('touchend', () => {
+  startDist = null;
 });
 
 window.onload = init;
