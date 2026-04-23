@@ -8,85 +8,45 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
 <style>
-body {
-  margin: 0;
-  font-family: Arial, sans-serif;
-  background: #f1f5f9;
-}
+body { margin:0; font-family:Arial; background:#f1f5f9; }
 
-/* Compact Header */
 .header {
-  position: sticky;
-  top: 0;
-  background: white;
-  padding: 6px;
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  border-bottom: 1px solid #ddd;
-  z-index: 1000;
+  position:sticky; top:0;
+  background:white; padding:6px;
+  display:flex; gap:6px; align-items:center;
+  border-bottom:1px solid #ddd;
+  z-index:1000;
 }
 
 button {
-  padding: 4px 8px;
-  font-size: 12px;
-  border: 1px solid #ddd;
-  background: white;
-  border-radius: 6px;
-  cursor: pointer;
+  padding:4px 8px; font-size:12px;
+  border:1px solid #ddd;
+  background:white; border-radius:6px;
 }
 
-#page-input {
-  width: 50px;
-  font-size: 12px;
-}
+#page-input { width:50px; font-size:12px; }
 
-/* Viewer */
 #pdf-viewer {
-  height: calc(100vh - 45px);
-  overflow: auto;
-  scroll-behavior: smooth;
+  height:calc(100vh - 45px);
+  overflow:auto;
 }
 
-/* Fullscreen */
-body.fullscreen .header {
-  display: none;
-}
+body.fullscreen .header { display:none; }
+body.fullscreen #pdf-viewer { height:100vh; }
 
-body.fullscreen #pdf-viewer {
-  height: 100vh;
-}
-
-/* Pages */
 .page {
-  margin: 10px auto;
-  background: white;
-  box-shadow: 0 8px 20px rgba(0,0,0,0.15);
-  border-radius: 8px;
+  margin:10px auto;
+  background:white;
+  box-shadow:0 8px 20px rgba(0,0,0,0.15);
+  border-radius:8px;
 }
 
-canvas {
-  display: block;
-}
-
-/* Exit button */
 #exit-fullscreen {
-  position: fixed;
-  top: 15px;
-  right: 15px;
-  background: rgba(0,0,0,0.7);
-  color: white;
-  padding: 8px 12px;
-  border-radius: 6px;
-  display: none;
-  z-index: 2000;
-  cursor: pointer;
-  transition: opacity 0.3s;
-}
-
-#exit-fullscreen.hidden {
-  opacity: 0;
-  pointer-events: none;
+  position:fixed; top:15px; right:15px;
+  background:rgba(0,0,0,0.7);
+  color:white; padding:8px 12px;
+  border-radius:6px;
+  display:none;
 }
 </style>
 </head>
@@ -117,8 +77,14 @@ canvas {
 pdfjsLib.GlobalWorkerOptions.workerSrc =
 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-const urlParams = new URLSearchParams(window.location.search);
-const path = urlParams.get('path');
+const params = new URLSearchParams(location.search);
+const path = params.get('path');
+
+if (!path) {
+  document.getElementById('loading').innerText = "No file path provided";
+  throw new Error("Missing path");
+}
+
 const fileURL = `/file?path=${encodeURIComponent(path)}`;
 
 let pdfDoc, totalPages, currentPage = 1, scale = 1.2;
@@ -130,25 +96,29 @@ const pageRefs = {};
 const canvasRefs = {};
 const rendered = new Set();
 
-/* INIT */
 async function init() {
-  pdfDoc = await pdfjsLib.getDocument(fileURL).promise;
-  totalPages = pdfDoc.numPages;
+  try {
+    pdfDoc = await pdfjsLib.getDocument(fileURL).promise;
+    totalPages = pdfDoc.numPages;
 
-  document.getElementById('total').textContent = `/ ${totalPages}`;
+    document.getElementById('total').textContent = `/ ${totalPages}`;
 
-  const page = await pdfDoc.getPage(1);
-  const vp = page.getViewport({ scale: 1 });
-  scale = (viewer.clientWidth - 20) / vp.width;
+    const page = await pdfDoc.getPage(1);
+    const vp = page.getViewport({ scale: 1 });
+    scale = (viewer.clientWidth - 20) / vp.width;
 
-  loading.style.display = 'none';
+    loading.style.display = 'none';
 
-  createPages();
-  observePages();
-  trackScroll();
+    createPages();
+    observePages();
+    trackScroll();
+
+  } catch (err) {
+    loading.innerText = "Failed to load PDF: " + err.message;
+    console.error(err);
+  }
 }
 
-/* CREATE PAGES */
 function createPages() {
   const wrap = document.createElement('div');
 
@@ -169,7 +139,6 @@ function createPages() {
   viewer.appendChild(wrap);
 }
 
-/* LAZY LOAD */
 function observePages() {
   const observer = new IntersectionObserver(entries => {
     entries.forEach(e => {
@@ -185,14 +154,13 @@ function observePages() {
   Object.values(pageRefs).forEach(el => observer.observe(el));
 }
 
-/* RENDER (NO FLIP) */
 async function renderPage(p) {
   if (rendered.has(p)) return;
 
   const page = await pdfDoc.getPage(p);
 
   const viewport = page.getViewport({
-    scale: scale,
+    scale,
     rotation: (page.rotate + 360) % 360
   });
 
@@ -213,7 +181,6 @@ async function renderPage(p) {
   rendered.add(p);
 }
 
-/* SCROLL TRACK */
 function trackScroll() {
   viewer.addEventListener('scroll', () => {
     const mid = viewer.scrollTop + viewer.clientHeight / 2;
@@ -229,73 +196,51 @@ function trackScroll() {
   });
 }
 
-/* NAVIGATION */
 function goToPage(p) {
   const el = pageRefs[p];
-  if (!el) return;
-  viewer.scrollTo({ top: el.offsetTop - 10, behavior: 'smooth' });
+  if (el) viewer.scrollTo({ top: el.offsetTop - 10, behavior: 'smooth' });
 }
 
-prev.onclick = () => currentPage > 1 && goToPage(currentPage - 1);
-next.onclick = () => currentPage < totalPages && goToPage(currentPage + 1);
+document.getElementById('prev').onclick = () => currentPage > 1 && goToPage(currentPage - 1);
+document.getElementById('next').onclick = () => currentPage < totalPages && goToPage(currentPage + 1);
 
-page-input.onchange = (e) => {
+document.getElementById('page-input').onchange = (e) => {
   const p = parseInt(e.target.value);
   if (p >= 1 && p <= totalPages) goToPage(p);
 };
 
-/* ZOOM */
 function rerender() {
   rendered.clear();
   Object.keys(canvasRefs).forEach(p => renderPage(parseInt(p)));
 }
 
-zoom-in.onclick = () => { scale = Math.min(scale + 0.25, 4); rerender(); };
-zoom-out.onclick = () => { scale = Math.max(scale - 0.25, 0.5); rerender(); };
+document.getElementById('zoom-in').onclick = () => { scale = Math.min(scale + 0.25, 4); rerender(); };
+document.getElementById('zoom-out').onclick = () => { scale = Math.max(scale - 0.25, 0.5); rerender(); };
 
-fit.onclick = async () => {
+document.getElementById('fit').onclick = async () => {
   const page = await pdfDoc.getPage(1);
   const vp = page.getViewport({ scale: 1 });
   scale = (viewer.clientWidth - 20) / vp.width;
   rerender();
 };
 
-/* DOWNLOAD */
-download.onclick = () => {
+document.getElementById('download').onclick = () => {
   const a = document.createElement('a');
   a.href = fileURL;
-  a.download = path?.split('/').pop() || 'document.pdf';
-  document.body.appendChild(a);
+  a.download = path.split('/').pop();
   a.click();
-  a.remove();
 };
 
 /* FULLSCREEN */
-const fsBtn = document.getElementById('fullscreen');
 const exitBtn = document.getElementById('exit-fullscreen');
 
-let hideTimeout;
-
-fsBtn.onclick = async () => {
+document.getElementById('fullscreen').onclick = async () => {
   await document.documentElement.requestFullscreen();
   document.body.classList.add('fullscreen');
   exitBtn.style.display = 'block';
-  showExit();
 };
 
 exitBtn.onclick = () => document.exitFullscreen();
-
-function showExit() {
-  exitBtn.classList.remove('hidden');
-  clearTimeout(hideTimeout);
-  hideTimeout = setTimeout(() => {
-    exitBtn.classList.add('hidden');
-  }, 2000);
-}
-
-document.addEventListener('click', () => {
-  if (document.fullscreenElement) showExit();
-});
 
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement) {
@@ -304,31 +249,28 @@ document.addEventListener('fullscreenchange', () => {
   }
 });
 
-/* 🔥 PINCH ZOOM */
+/* PINCH ZOOM */
 let startDist = null;
 let startScale = scale;
 
-function getDistance(t) {
+function getDist(t) {
   return Math.hypot(
     t[0].clientX - t[1].clientX,
     t[0].clientY - t[1].clientY
   );
 }
 
-viewer.addEventListener('touchstart', (e) => {
+viewer.addEventListener('touchstart', e => {
   if (e.touches.length === 2) {
-    startDist = getDistance(e.touches);
+    startDist = getDist(e.touches);
     startScale = scale;
   }
 }, { passive: true });
 
-viewer.addEventListener('touchmove', (e) => {
+viewer.addEventListener('touchmove', e => {
   if (e.touches.length === 2 && startDist) {
     e.preventDefault();
-
-    const dist = getDistance(e.touches);
-    let newScale = startScale * (dist / startDist);
-
+    let newScale = startScale * (getDist(e.touches) / startDist);
     newScale = Math.max(0.5, Math.min(newScale, 4));
 
     if (Math.abs(newScale - scale) > 0.02) {
@@ -338,9 +280,7 @@ viewer.addEventListener('touchmove', (e) => {
   }
 }, { passive: false });
 
-viewer.addEventListener('touchend', () => {
-  startDist = null;
-});
+viewer.addEventListener('touchend', () => startDist = null);
 
 window.onload = init;
 </script>
