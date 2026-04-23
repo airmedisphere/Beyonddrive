@@ -20,20 +20,25 @@ body {
   background: white;
   padding: 10px;
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
   border-bottom: 1px solid #ddd;
   z-index: 1000;
+  flex-wrap: wrap;
 }
 
 button {
   padding: 6px 10px;
+  border: 1px solid #ddd;
+  background: white;
+  border-radius: 6px;
   cursor: pointer;
 }
 
 #pdf-viewer {
-  height: calc(100vh - 50px);
+  height: calc(100vh - 60px);
   overflow: auto;
+  scroll-behavior: smooth;
 }
 
 .page {
@@ -65,6 +70,8 @@ canvas {
   <button id="zoom-in">+</button>
   <button id="zoom-out">-</button>
   <button id="fit">Fit</button>
+
+  <button id="download">Download</button>
 </div>
 
 <div id="pdf-viewer">
@@ -93,24 +100,29 @@ const rendered = new Set();
 
 // INIT
 async function init() {
-  pdfDoc = await pdfjsLib.getDocument(fileURL).promise;
-  totalPages = pdfDoc.numPages;
+  try {
+    pdfDoc = await pdfjsLib.getDocument(fileURL).promise;
+    totalPages = pdfDoc.numPages;
 
-  document.getElementById('total').textContent = `/ ${totalPages}`;
+    document.getElementById('total').textContent = `/ ${totalPages}`;
 
-  // auto fit width
-  const page = await pdfDoc.getPage(1);
-  const vp = page.getViewport({ scale: 1 });
-  scale = (viewer.clientWidth - 40) / vp.width;
+    // Fit width initially
+    const page = await pdfDoc.getPage(1);
+    const vp = page.getViewport({ scale: 1 });
+    scale = (viewer.clientWidth - 40) / vp.width;
 
-  loading.style.display = 'none';
+    loading.style.display = 'none';
 
-  createPages();
-  observePages();
-  trackScroll();
+    createPages();
+    observePages();
+    trackScroll();
+
+  } catch (e) {
+    loading.innerHTML = "Error loading PDF: " + e.message;
+  }
 }
 
-// CREATE ALL PAGE CONTAINERS
+// CREATE PAGE CONTAINERS
 function createPages() {
   const wrapper = document.createElement('div');
 
@@ -131,7 +143,7 @@ function createPages() {
   viewer.appendChild(wrapper);
 }
 
-// LAZY RENDER
+// LAZY LOAD
 function observePages() {
   const observer = new IntersectionObserver(entries => {
     entries.forEach(entry => {
@@ -139,7 +151,6 @@ function observePages() {
         const p = parseInt(entry.target.dataset.page);
 
         renderPage(p);
-
         if (p > 1) renderPage(p - 1);
         if (p < totalPages) renderPage(p + 1);
       }
@@ -152,12 +163,17 @@ function observePages() {
   Object.values(pageRefs).forEach(el => observer.observe(el));
 }
 
-// RENDER PAGE
+// RENDER PAGE (FIXED ROTATION)
 async function renderPage(p) {
   if (rendered.has(p)) return;
 
   const page = await pdfDoc.getPage(p);
-  const viewport = page.getViewport({ scale });
+
+  // ✅ Rotation fix (prevents flipped pages)
+  const viewport = page.getViewport({
+    scale: scale,
+    rotation: (page.rotate + 360) % 360
+  });
 
   const canvas = canvasRefs[p];
   const ctx = canvas.getContext('2d');
@@ -171,12 +187,15 @@ async function renderPage(p) {
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  await page.render({
+    canvasContext: ctx,
+    viewport
+  }).promise;
 
   rendered.add(p);
 }
 
-// SCROLL TRACKING
+// SCROLL TRACK PAGE
 function trackScroll() {
   viewer.addEventListener('scroll', () => {
     const mid = viewer.scrollTop + viewer.clientHeight / 2;
@@ -244,6 +263,17 @@ document.getElementById('fit').onclick = async () => {
   rerender();
 };
 
+// DOWNLOAD BUTTON
+document.getElementById('download').onclick = () => {
+  const link = document.createElement('a');
+  link.href = fileURL;
+  link.download = path?.split('/').pop() || 'document.pdf';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+// INIT
 window.onload = init;
 </script>
 
