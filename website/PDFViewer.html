@@ -16,7 +16,9 @@
   --bar-h:46px;--r:7px;--ease:180ms cubic-bezier(.4,0,.2,1);
 }
 html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-family:'DM Mono',monospace;overflow:hidden;-webkit-font-smoothing:antialiased}
-#bar{position:fixed;top:0;left:0;right:0;z-index:300;height:var(--bar-h);background:rgba(10,10,10,0.9);backdrop-filter:blur(24px) saturate(1.4);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:2px;padding:0 8px;transition:transform var(--ease),opacity var(--ease);will-change:transform}
+
+/* ── BAR */
+#bar{position:fixed;top:0;left:0;right:0;z-index:300;height:var(--bar-h);background:rgba(10,10,10,0.92);backdrop-filter:blur(24px) saturate(1.4);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:2px;padding:0 8px;transition:transform var(--ease),opacity var(--ease);will-change:transform}
 #bar.hide{transform:translateY(calc(-1 * var(--bar-h)));opacity:0;pointer-events:none}
 .sep{width:1px;height:20px;background:var(--border);margin:0 3px;flex-shrink:0}
 .gap{flex:1}
@@ -26,6 +28,7 @@ html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-fam
 .b.sq{padding:0;width:32px;justify-content:center}
 .b.hi{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-border)}
 .b.hi:hover{background:rgba(185,247,81,0.16)}
+.b:disabled{opacity:0.25;cursor:not-allowed;pointer-events:none}
 .b svg{flex-shrink:0;stroke-width:1.8}
 #pg-wrap{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted2)}
 #pg-in{width:34px;height:26px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:center;outline:none;transition:border-color var(--ease);-moz-appearance:textfield}
@@ -33,16 +36,24 @@ html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-fam
 #pg-in:focus{border-color:var(--accent)}
 #pg-total{color:var(--muted)}
 #zm-val{font-size:11px;color:var(--muted2);min-width:36px;text-align:center}
-#fname{font-family:'Syne',sans-serif;font-size:12px;font-weight:600;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0.8}
+#fname{font-family:'Syne',sans-serif;font-size:12px;font-weight:600;color:var(--text);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0.8}
 #mode-badge{font-size:9px;font-weight:500;letter-spacing:0.08em;padding:2px 6px;border-radius:3px;text-transform:uppercase;background:var(--surface);border:1px solid var(--border);color:var(--muted2);flex-shrink:0}
-#reveal{position:fixed;top:0;left:0;right:0;height:6px;z-index:299;cursor:default}
+
+/* ── HOVER ZONE at top to reveal bar */
+#reveal{position:fixed;top:0;left:0;right:0;height:8px;z-index:299;cursor:default}
+
+/* ── VIEWER */
 #viewer{position:fixed;inset:0;padding-top:var(--bar-h);overflow:auto;display:flex;flex-direction:column;align-items:center;background:var(--bg);transition:padding var(--ease);scroll-behavior:smooth}
 #viewer.nobar{padding-top:0}
 #viewer::-webkit-scrollbar{width:5px}
 #viewer::-webkit-scrollbar-track{background:transparent}
 #viewer::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:3px}
 #viewer::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.14)}
+
+/* PDF canvas */
 #cv{display:none;box-shadow:0 4px 80px rgba(0,0,0,0.7);border-radius:3px;max-width:100%;margin:16px}
+
+/* EPUB content */
 #epub{display:none;width:100%;max-width:740px;min-height:calc(100vh - var(--bar-h) - 32px);background:#faf9f7;border-radius:4px;box-shadow:0 4px 80px rgba(0,0,0,0.7);padding:60px 72px;margin:16px;line-height:1.85;color:#111;font-family:'Georgia','Times New Roman',serif;font-size:18px}
 #epub.on{display:block}
 #epub h1,#epub h2,#epub h3,#epub h4{font-family:'Syne',sans-serif;font-weight:700;margin:1.4em 0 0.5em;line-height:1.25;color:#0a0a0a}
@@ -53,11 +64,15 @@ html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-fam
 #epub blockquote{border-left:3px solid #ddd;margin:1.5em 0;padding:0.5em 1.5em;color:#555;font-style:italic}
 #epub pre,#epub code{font-family:'DM Mono',monospace;font-size:0.85em;background:#f0f0ee;border-radius:4px;padding:0.2em 0.4em}
 #epub pre{padding:1em;overflow-x:auto}
+
+/* EPUB chapter nav arrows */
 .enav{position:fixed;top:50%;z-index:200;transform:translateY(-50%);width:32px;height:72px;background:rgba(255,255,255,0.03);border:1px solid var(--border);color:var(--muted2);cursor:pointer;display:none;align-items:center;justify-content:center;transition:all var(--ease)}
 .enav:hover{background:rgba(255,255,255,0.07);color:var(--text)}
 .enav.L{left:0;border-left:none;border-radius:0 var(--r) var(--r) 0}
 .enav.R{right:0;border-right:none;border-radius:var(--r) 0 0 var(--r)}
 .enav.on{display:flex}
+
+/* ── DROP SCREEN */
 #drop{position:fixed;inset:0;z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:var(--bg);transition:opacity var(--ease)}
 #drop.gone{opacity:0;pointer-events:none}
 #drop.over{background:rgba(185,247,81,0.03)}
@@ -67,17 +82,22 @@ html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-fam
 .di-sub{font-size:11px;color:var(--muted2);letter-spacing:0.04em}
 .di-btn{height:36px;padding:0 18px;background:var(--accent-bg);border:1px solid var(--accent-border);border-radius:var(--r);color:var(--accent);font-family:'DM Mono',monospace;font-size:11px;font-weight:500;cursor:pointer;transition:all var(--ease);letter-spacing:0.03em}
 .di-btn:hover{background:rgba(185,247,81,0.16)}
+
+/* ── SPINNER */
 #spin{position:fixed;inset:0;z-index:400;display:none;align-items:center;justify-content:center;background:rgba(10,10,10,0.7);backdrop-filter:blur(4px)}
 #spin.on{display:flex}
 .sring{width:32px;height:32px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:rot 0.7s linear infinite}
 @keyframes rot{to{transform:rotate(360deg)}}
+
+/* ── TOAST */
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(6px);background:rgba(20,20,20,0.95);border:1px solid var(--border);border-radius:var(--r);padding:9px 16px;font-size:11px;color:var(--text);opacity:0;pointer-events:none;transition:all var(--ease);z-index:600;backdrop-filter:blur(16px);white-space:nowrap}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
-:fullscreen #bar{background:rgba(5,5,5,0.92)}
-:fullscreen #viewer{padding-top:var(--bar-h)}
-:fullscreen #viewer.nobar{padding-top:0}
-:-webkit-full-screen #bar{background:rgba(5,5,5,0.92)}
-:-moz-full-screen #bar{background:rgba(5,5,5,0.92)}
+#toast.err{border-color:rgba(255,80,80,0.3);color:#ff9090}
+
+/* ── FULLSCREEN */
+:fullscreen #bar,:fullscreen #viewer{/* native fullscreen handled via JS */}
+
+/* ── MOBILE */
 @media(max-width:600px){
   #fname,#mode-badge{display:none}
   .sep{margin:0 1px}
@@ -86,6 +106,7 @@ html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-fam
   .b.sq{width:28px}
   #epub{padding:24px 18px;font-size:16px;margin:8px}
   #cv{margin:8px}
+  .enav{display:none!important}
 }
 </style>
 </head>
@@ -146,7 +167,7 @@ html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-fam
     Share
   </button>
   <div class="sep"></div>
-  <button class="b sq" id="bfs" title="Fullscreen F">
+  <button class="b sq hi" id="bfs" title="Fullscreen (F)">
     <svg id="icE" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
     <svg id="icX" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="display:none"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
   </button>
@@ -174,34 +195,99 @@ const bar=$('bar'),viewer=$('viewer'),cv=$('cv'),ctx=cv.getContext('2d');
 const epubEl=$('epub'),drop=$('drop'),spin=$('spin'),toast=$('toast'),reveal=$('reveal');
 const S={mode:null,pdf:null,page:1,total:0,scale:1.0,fileUrl:null,fileData:null,fileName:'',epub:{zip:null,spine:[],cur:0,opfDir:''},rendering:false,barVisible:true,hideTimer:null,parser:new DOMParser()};
 
+// ── HELPER: detect file type from name or content-type
+function detectType(name, contentType) {
+  const ext = name.split('.').pop().toLowerCase();
+  if (ext === 'pdf') return 'pdf';
+  if (ext === 'epub') return 'epub';
+  // Fall back to Content-Type header
+  if (contentType) {
+    const ct = contentType.toLowerCase();
+    if (ct.includes('pdf')) return 'pdf';
+    if (ct.includes('epub') || ct.includes('zip')) return 'epub'; // epubs are zips
+  }
+  return null;
+}
+
+// ── HELPER: extract filename from Content-Disposition header
+function getFilenameFromHeaders(headers) {
+  const cd = headers.get('Content-Disposition') || '';
+  // Try filename*= (RFC 5987) first
+  let m = cd.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
+  if (m) return decodeURIComponent(m[1].trim().replace(/^["']|["']$/g, ''));
+  // Then filename=
+  m = cd.match(/filename=["']?([^;"']+)["']?/i);
+  if (m) return m[1].trim();
+  return null;
+}
+
 // ── BAR AUTO-HIDE
 let onBar=false;
 bar.addEventListener('mouseenter',()=>{onBar=true;showBar()});
 bar.addEventListener('mouseleave',()=>{onBar=false;sched()});
 reveal.addEventListener('mouseenter',showBar);
+reveal.addEventListener('mousemove',showBar);
 viewer.addEventListener('mousemove',()=>{showBar();sched()});
 function showBar(){bar.classList.remove('hide');viewer.classList.remove('nobar');S.barVisible=true;clearTimeout(S.hideTimer)}
-function sched(){clearTimeout(S.hideTimer);S.hideTimer=setTimeout(()=>{if(!onBar){bar.classList.add('hide');viewer.classList.add('nobar');S.barVisible=false}},2600)}
+function sched(){clearTimeout(S.hideTimer);S.hideTimer=setTimeout(()=>{if(!onBar){bar.classList.add('hide');viewer.classList.add('nobar');S.barVisible=false}},2800)}
 
 // ── TOAST
 let tT;
-function showToast(msg,dur=2200){toast.textContent=msg;toast.classList.add('on');clearTimeout(tT);tT=setTimeout(()=>toast.classList.remove('on'),dur)}
+function showToast(msg,dur=2400,isErr=false){
+  toast.textContent=msg;
+  toast.classList.toggle('err',isErr);
+  toast.classList.add('on');
+  clearTimeout(tT);
+  tT=setTimeout(()=>toast.classList.remove('on'),dur);
+}
 
-// ── URL PARAM AUTO-LOAD
-(function(){
+// ── URL PARAM AUTO-LOAD (THE MAIN FIX)
+(async function(){
   const p=new URLSearchParams(location.search);
   const path=p.get('path');
   if(!path)return;
-  const url='/file?path='+encodeURIComponent(path);
-  const name=path.split('/').pop()||'document';
-  S.fileUrl=url;S.fileName=name;
-  $('fname').textContent=name;
+
+  const fileUrl='/file?path='+encodeURIComponent(path);
+  // Get name hint from path (may have no extension if it's a Telegram ID)
+  const pathName=path.split('/').pop()||'document';
+  S.fileUrl=fileUrl;
   drop.classList.add('gone');
   spin.classList.add('on');
-  fetch(url)
-    .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()})
-    .then(ab=>{S.fileData=ab;const ext=name.split('.').pop().toLowerCase();if(ext==='pdf')return loadPDF(ab);if(ext==='epub')return loadEPUB(ab);showToast('Unsupported format')})
-    .catch(e=>{spin.classList.remove('on');showToast('Failed to load: '+e.message);drop.classList.remove('gone')});
+
+  try{
+    const resp=await fetch(fileUrl);
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+
+    // ── KEY FIX: Get real filename from Content-Disposition header
+    const realName=getFilenameFromHeaders(resp.headers)||pathName;
+    S.fileName=realName;
+    $('fname').textContent=realName;
+
+    // ── KEY FIX: Detect type from real name + content-type header
+    const contentType=resp.headers.get('Content-Type')||'';
+    const fileType=detectType(realName, contentType);
+
+    const ab=await resp.arrayBuffer();
+    S.fileData=ab;
+
+    if(fileType==='pdf'){
+      await loadPDF(ab);
+    } else if(fileType==='epub'){
+      await loadEPUB(ab);
+    } else {
+      // Last resort: sniff the magic bytes
+      const bytes=new Uint8Array(ab,0,8);
+      const isPDF=bytes[0]===0x25&&bytes[1]===0x50&&bytes[2]===0x44&&bytes[3]===0x46; // %PDF
+      const isZIP=bytes[0]===0x50&&bytes[1]===0x4B; // PK (ZIP/EPUB)
+      if(isPDF){ S.fileName=realName.endsWith('.pdf')?realName:realName+'.pdf'; await loadPDF(ab); }
+      else if(isZIP){ S.fileName=realName.endsWith('.epub')?realName:realName+'.epub'; await loadEPUB(ab); }
+      else{ spin.classList.remove('on'); showToast('Unsupported file format',3000,true); drop.classList.remove('gone'); }
+    }
+  }catch(e){
+    spin.classList.remove('on');
+    showToast('Failed to load: '+e.message,4000,true);
+    drop.classList.remove('gone');
+  }
 })();
 
 // ── LOCAL FILE
@@ -217,7 +303,7 @@ async function openLocal(file){
   const ext=file.name.split('.').pop().toLowerCase();
   if(ext==='pdf')await loadPDF(ab);
   else if(ext==='epub')await loadEPUB(ab);
-  else{showToast('Unsupported. Use PDF or EPUB.');spin.classList.remove('on');drop.classList.remove('gone')}
+  else{showToast('Unsupported. Use PDF or EPUB.',3000,true);spin.classList.remove('on');drop.classList.remove('gone')}
 }
 
 // ══ PDF
@@ -230,7 +316,7 @@ async function loadPDF(ab){
     $('mode-badge').textContent='PDF';
     await fitScale();await renderPage(1);
     spin.classList.remove('on');sched();
-  }catch(e){spin.classList.remove('on');showToast('PDF error: '+e.message)}
+  }catch(e){spin.classList.remove('on');showToast('PDF error: '+e.message,4000,true)}
 }
 async function fitScale(){
   const page=await S.pdf.getPage(1);const vp=page.getViewport({scale:1});
@@ -248,7 +334,7 @@ async function renderPage(num){
     cv.style.width=(vp.width/dpr)+'px';cv.style.height=(vp.height/dpr)+'px';
     await page.render({canvasContext:ctx,viewport:vp}).promise;
     S.page=num;syncUI();viewer.scrollTo({top:0,behavior:'instant'});
-  }catch(e){showToast('Render error: '+e.message)}
+  }catch(e){showToast('Render error: '+e.message,3000,true)}
   finally{S.rendering=false}
 }
 
@@ -271,7 +357,7 @@ async function loadEPUB(ab){
     cv.style.display='none';epubEl.classList.add('on');setEpubNav(true);
     $('mode-badge').textContent='EPUB';syncUI();
     await renderEPUB(0);spin.classList.remove('on');sched();
-  }catch(e){spin.classList.remove('on');showToast('EPUB error: '+e.message);console.error(e)}
+  }catch(e){spin.classList.remove('on');showToast('EPUB error: '+e.message,4000,true);console.error(e)}
 }
 async function renderEPUB(idx){
   if(idx<0||idx>=S.epub.spine.length)return;
@@ -279,7 +365,7 @@ async function renderEPUB(idx){
   try{
     const path=S.epub.spine[idx];
     const f=S.epub.zip.file(path)||S.epub.zip.file(decodeURIComponent(path));
-    if(!f){showToast('Chapter not found');return}
+    if(!f){showToast('Chapter not found',3000,true);return}
     let html=await f.async('string');
     const dir=path.includes('/')?path.slice(0,path.lastIndexOf('/')+1):'';
     const imgs=[...html.matchAll(/src=["']([^"'#?]+)["']/g)];
@@ -289,7 +375,7 @@ async function renderEPUB(idx){
       const img=S.epub.zip.file(ip)||S.epub.zip.file(decodeURIComponent(ip));
       if(img){const b64=await img.async('base64');const mt=/\.png$/i.test(ip)?'image/png':/\.gif$/i.test(ip)?'image/gif':/\.svg$/i.test(ip)?'image/svg+xml':'image/jpeg';html=html.replace(m[0],`src="data:${mt};base64,${b64}"`)}
     }
-    const cssM=[...html.matchAll(/href=["']([^"']+\.css[^"']*)["']/g)];
+    const cssM=[...html.matchAll(/href=["']([^"']+\.css[^"']*)['"]/g)];
     let iStyle='';
     for(const m of cssM){
       const cp=dir+m[1].split('?')[0];
@@ -321,7 +407,7 @@ $('eL').addEventListener('click',()=>go(-1));
 $('eR').addEventListener('click',()=>go(1));
 $('pg-in').addEventListener('change',()=>{const v=parseInt($('pg-in').value);if(!isNaN(v)&&v>=1&&v<=S.total){if(S.mode==='pdf')renderPage(v);else renderEPUB(v-1)}else $('pg-in').value=S.page});
 
-// ══ ZOOM
+// ══ ZOOM (PDF only)
 function zoom(f){if(S.mode!=='pdf')return;S.scale=Math.min(Math.max(S.scale*f,0.15),6);$('zm-val').textContent=Math.round(S.scale*100)+'%';renderPage(S.page)}
 async function fitWidth(){
   if(S.mode!=='pdf'||!S.pdf)return;
@@ -343,12 +429,30 @@ $('bdl').addEventListener('click',()=>{
 $('bcp').addEventListener('click',()=>{
   const path=new URLSearchParams(location.search).get('path');
   const url=path?location.origin+'/pdf-viewer?path='+encodeURIComponent(path):location.href;
-  navigator.clipboard?.writeText(url).then(()=>showToast('Link copied!')).catch(()=>showToast('Copy failed'));
+  navigator.clipboard?.writeText(url).then(()=>showToast('Link copied!')).catch(()=>showToast('Copy failed',2400,true));
 });
 
-// ══ FULLSCREEN
-$('bfs').addEventListener('click',()=>{document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()});
-document.addEventListener('fullscreenchange',()=>{const fs=!!document.fullscreenElement;$('icE').style.display=fs?'none':'';$('icX').style.display=fs?'':'none';$('bfs').classList.toggle('hi',fs)});
+// ══ FULLSCREEN (content area only — bar stays)
+$('bfs').addEventListener('click',toggleFullscreen);
+function toggleFullscreen(){
+  if(document.fullscreenElement){
+    document.exitFullscreen();
+  } else {
+    // Use document.documentElement so bar stays accessible
+    document.documentElement.requestFullscreen();
+  }
+}
+document.addEventListener('fullscreenchange',()=>{
+  const fs=!!document.fullscreenElement;
+  $('icE').style.display=fs?'none':'';
+  $('icX').style.display=fs?'':'none';
+  $('bfs').classList.toggle('hi',!fs); // hi when NOT fullscreen = invite to enter
+  if(fs){
+    // Force bar visible in fullscreen
+    showBar();
+    sched();
+  }
+});
 
 // ══ SYNC UI
 function syncUI(){
@@ -356,7 +460,8 @@ function syncUI(){
   $('pg-total').textContent=S.total||'—';
   $('bp').disabled=S.page<=1;$('bn').disabled=S.page>=S.total;
   $('zm-val').textContent=Math.round(S.scale*100)+'%';
-  [$('bzi'),$('bzo'),$('bfit')].forEach(b=>b.style.opacity=S.mode==='pdf'?'1':'0.3');
+  const pdfMode=S.mode==='pdf';
+  [$('bzi'),$('bzo'),$('bfit')].forEach(b=>{b.style.opacity=pdfMode?'1':'0.3';b.style.pointerEvents=pdfMode?'':'none'});
 }
 
 // ══ KEYBOARD
@@ -370,7 +475,7 @@ document.addEventListener('keydown',e=>{
     case'+':case'=':e.preventDefault();zoom(1.2);break;
     case'-':e.preventDefault();zoom(1/1.2);break;
     case'0':e.preventDefault();fitWidth();break;
-    case'f':case'F':$('bfs').click();break;
+    case'f':case'F':toggleFullscreen();break;
     case'h':case'H':S.barVisible?(bar.classList.add('hide'),viewer.classList.add('nobar'),S.barVisible=false):showBar();break;
     case'Escape':if(document.fullscreenElement)document.exitFullscreen();break;
   }
