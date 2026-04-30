@@ -10,103 +10,201 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;700&display=swap');
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --bg:#0a0a0a;--surface:#111;--border:rgba(255,255,255,0.07);
-  --text:#e2e2e2;--muted:#4a4a4a;--muted2:#666;
-  --accent:#b9f751;--accent-bg:rgba(185,247,81,0.1);--accent-border:rgba(185,247,81,0.22);
-  --bar-h:46px;--r:7px;--ease:180ms cubic-bezier(.4,0,.2,1);
+  --bg:#0a0a0a;--surface:#111;--border:rgba(255,255,255,0.08);
+  --text:#e2e2e2;--muted:#3a3a3a;--muted2:#666;
+  --accent:#b9f751;--accent-bg:rgba(185,247,81,0.1);--accent-border:rgba(185,247,81,0.25);
+  --bar-h:48px;--r:7px;--ease:180ms cubic-bezier(.4,0,.2,1);
 }
 html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-family:'DM Mono',monospace;overflow:hidden;-webkit-font-smoothing:antialiased}
 
-/* ── BAR */
-#bar{position:fixed;top:0;left:0;right:0;z-index:300;height:var(--bar-h);background:rgba(10,10,10,0.92);backdrop-filter:blur(24px) saturate(1.4);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:2px;padding:0 8px;transition:transform var(--ease),opacity var(--ease);will-change:transform}
+/* ════ TOOLBAR ════ */
+#bar{
+  position:fixed;top:0;left:0;right:0;z-index:300;
+  height:var(--bar-h);
+  background:rgba(10,10,10,0.94);
+  backdrop-filter:blur(24px) saturate(1.4);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;
+  gap:0;padding:0 10px;
+  transition:transform var(--ease),opacity var(--ease);
+  will-change:transform;
+}
 #bar.hide{transform:translateY(calc(-1 * var(--bar-h)));opacity:0;pointer-events:none}
-.sep{width:1px;height:20px;background:var(--border);margin:0 3px;flex-shrink:0}
-.gap{flex:1}
-.b{height:32px;min-width:32px;padding:0 9px;background:transparent;border:1px solid transparent;border-radius:var(--r);color:var(--muted2);cursor:pointer;font-family:'DM Mono',monospace;font-size:11px;font-weight:500;display:flex;align-items:center;gap:5px;white-space:nowrap;transition:all var(--ease);letter-spacing:0.03em;user-select:none}
-.b:hover{background:rgba(255,255,255,0.05);color:var(--text);border-color:var(--border)}
-.b:active{transform:scale(0.95)}
-.b.sq{padding:0;width:32px;justify-content:center}
+
+/* left / center / right sections */
+#bar-left{display:flex;align-items:center;gap:2px;flex:1;min-width:0;overflow:hidden}
+#bar-center{display:flex;align-items:center;gap:2px;flex-shrink:0}
+#bar-right{display:flex;align-items:center;gap:2px;flex:1;justify-content:flex-end}
+
+.sep{width:1px;height:20px;background:var(--border);margin:0 5px;flex-shrink:0}
+
+/* buttons */
+.b{
+  height:32px;min-width:32px;padding:0 8px;
+  background:transparent;border:1px solid transparent;border-radius:var(--r);
+  color:var(--muted2);cursor:pointer;
+  font-family:'DM Mono',monospace;font-size:11px;font-weight:500;
+  display:flex;align-items:center;justify-content:center;gap:4px;
+  white-space:nowrap;transition:all var(--ease);letter-spacing:0.03em;user-select:none;
+  flex-shrink:0;
+}
+.b:hover{background:rgba(255,255,255,0.06);color:var(--text);border-color:var(--border)}
+.b:active{transform:scale(0.94)}
+.b.sq{padding:0;width:32px}
 .b.hi{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-border)}
-.b.hi:hover{background:rgba(185,247,81,0.16)}
-.b:disabled{opacity:0.25;cursor:not-allowed;pointer-events:none}
+.b.hi:hover{background:rgba(185,247,81,0.17)}
+.b:disabled{opacity:0.2;cursor:not-allowed;pointer-events:none}
 .b svg{flex-shrink:0;stroke-width:1.8}
-#pg-wrap{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted2)}
-#pg-in{width:34px;height:26px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;text-align:center;outline:none;transition:border-color var(--ease);-moz-appearance:textfield}
+
+/* page input */
+#pg-wrap{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted2);flex-shrink:0}
+#pg-in{
+  width:36px;height:27px;
+  background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;
+  color:var(--text);font-family:'DM Mono',monospace;font-size:11px;
+  text-align:center;outline:none;transition:border-color var(--ease);
+  -moz-appearance:textfield;
+}
 #pg-in::-webkit-outer-spin-button,#pg-in::-webkit-inner-spin-button{-webkit-appearance:none}
 #pg-in:focus{border-color:var(--accent)}
-#pg-total{color:var(--muted)}
-#zm-val{font-size:11px;color:var(--muted2);min-width:36px;text-align:center}
-#fname{font-family:'Syne',sans-serif;font-size:12px;font-weight:600;color:var(--text);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0.8}
-#mode-badge{font-size:9px;font-weight:500;letter-spacing:0.08em;padding:2px 6px;border-radius:3px;text-transform:uppercase;background:var(--surface);border:1px solid var(--border);color:var(--muted2);flex-shrink:0}
+#pg-total{color:var(--muted);white-space:nowrap}
+#zm-val{font-size:11px;color:var(--muted2);min-width:38px;text-align:center;flex-shrink:0}
 
-/* ── HOVER ZONE at top to reveal bar */
-#reveal{position:fixed;top:0;left:0;right:0;height:8px;z-index:299;cursor:default}
+/* file info */
+#fname{
+  font-family:'Syne',sans-serif;font-size:12px;font-weight:600;
+  color:var(--text);opacity:0.75;
+  max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+#mode-badge{
+  font-size:9px;font-weight:500;letter-spacing:0.08em;
+  padding:2px 6px;border-radius:3px;text-transform:uppercase;
+  background:var(--surface);border:1px solid var(--border);color:var(--muted2);flex-shrink:0;
+}
 
-/* ── VIEWER */
-#viewer{position:fixed;inset:0;padding-top:var(--bar-h);overflow:auto;display:flex;flex-direction:column;align-items:center;background:var(--bg);transition:padding var(--ease);scroll-behavior:smooth}
+/* ════ REVEAL ZONE ════ */
+#reveal{position:fixed;top:0;left:0;right:0;height:10px;z-index:299}
+
+/* ════ VIEWER ════ */
+#viewer{
+  position:fixed;inset:0;
+  padding-top:var(--bar-h);
+  overflow-y:auto;overflow-x:hidden;
+  display:flex;flex-direction:column;align-items:center;
+  background:var(--bg);
+  transition:padding-top var(--ease);
+}
 #viewer.nobar{padding-top:0}
-#viewer::-webkit-scrollbar{width:5px}
+#viewer::-webkit-scrollbar{width:4px}
 #viewer::-webkit-scrollbar-track{background:transparent}
-#viewer::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:3px}
-#viewer::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.14)}
+#viewer::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.09);border-radius:2px}
+#viewer::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.16)}
 
 /* PDF canvas */
-#cv{display:none;box-shadow:0 4px 80px rgba(0,0,0,0.7);border-radius:3px;max-width:100%;margin:16px}
+#cv{
+  display:none;
+  box-shadow:0 4px 60px rgba(0,0,0,0.8);
+  border-radius:3px;max-width:calc(100% - 32px);
+  margin:16px auto;
+}
 
-/* EPUB content */
-#epub{display:none;width:100%;max-width:740px;min-height:calc(100vh - var(--bar-h) - 32px);background:#faf9f7;border-radius:4px;box-shadow:0 4px 80px rgba(0,0,0,0.7);padding:60px 72px;margin:16px;line-height:1.85;color:#111;font-family:'Georgia','Times New Roman',serif;font-size:18px}
-#epub.on{display:block}
-#epub h1,#epub h2,#epub h3,#epub h4{font-family:'Syne',sans-serif;font-weight:700;margin:1.4em 0 0.5em;line-height:1.25;color:#0a0a0a}
-#epub h1{font-size:2em}#epub h2{font-size:1.4em}#epub h3{font-size:1.15em}
-#epub p{margin-bottom:1em}
+/* ════ EPUB ════ */
+/* Wrapper: scrollable area for EPUB content */
+#epub-wrap{
+  display:none;
+  width:100%;max-width:760px;
+  margin:16px auto;
+  padding-bottom:32px; /* breathing room at bottom */
+}
+#epub-wrap.on{display:block}
+
+/* The white book-page card */
+#epub{
+  background:#faf9f7;
+  border-radius:6px;
+  box-shadow:0 4px 60px rgba(0,0,0,0.75);
+  padding:56px 64px;
+  line-height:1.85;color:#111;
+  font-family:'Georgia','Times New Roman',serif;font-size:18px;
+  /* CRITICAL: allow content to grow naturally — no fixed height */
+  width:100%;
+}
+
+/* ── Override any dark/broken styles the EPUB's own CSS might inject ── */
+#epub *{max-width:100%!important}
+#epub body,#epub html{background:transparent!important;color:#111!important}
+#epub h1,#epub h2,#epub h3,#epub h4,#epub h5,#epub h6{
+  font-family:'Syne',sans-serif!important;font-weight:700;
+  margin:1.3em 0 0.5em;line-height:1.25;color:#0a0a0a!important;
+}
+#epub h1{font-size:1.9em}#epub h2{font-size:1.4em}#epub h3{font-size:1.15em}
+#epub p{margin-bottom:1em;color:#111!important}
 #epub a{color:#1d4ed8;text-decoration:underline}
-#epub img{max-width:100%;height:auto;display:block;margin:1.5em auto;border-radius:4px}
-#epub blockquote{border-left:3px solid #ddd;margin:1.5em 0;padding:0.5em 1.5em;color:#555;font-style:italic}
-#epub pre,#epub code{font-family:'DM Mono',monospace;font-size:0.85em;background:#f0f0ee;border-radius:4px;padding:0.2em 0.4em}
-#epub pre{padding:1em;overflow-x:auto}
+#epub img{max-width:100%!important;height:auto;display:block;margin:1.5em auto;border-radius:4px}
+#epub blockquote{border-left:3px solid #ccc;margin:1.5em 0;padding:.5em 1.5em;color:#555;font-style:italic}
+#epub pre,#epub code{font-family:'DM Mono',monospace;font-size:.85em;background:#f0f0ee;border-radius:4px;padding:.2em .4em}
+#epub pre{padding:1em;overflow-x:auto;white-space:pre-wrap}
+#epub table{border-collapse:collapse;width:100%;margin:1em 0}
+#epub td,#epub th{border:1px solid #ddd;padding:.4em .6em;text-align:left;color:#111!important}
+#epub th{background:#f0eeec}
+/* Nuke dark backgrounds the book CSS might set */
+#epub [style*="background"]{background:transparent!important}
+#epub [style*="color:white"],[style*="color:#fff"],[style*="color: white"]{color:#333!important}
 
-/* EPUB chapter nav arrows */
-.enav{position:fixed;top:50%;z-index:200;transform:translateY(-50%);width:32px;height:72px;background:rgba(255,255,255,0.03);border:1px solid var(--border);color:var(--muted2);cursor:pointer;display:none;align-items:center;justify-content:center;transition:all var(--ease)}
-.enav:hover{background:rgba(255,255,255,0.07);color:var(--text)}
-.enav.L{left:0;border-left:none;border-radius:0 var(--r) var(--r) 0}
-.enav.R{right:0;border-right:none;border-radius:var(--r) 0 0 var(--r)}
-.enav.on{display:flex}
+/* EPUB bottom nav bar */
+#epub-nav{
+  display:none;
+  align-items:center;justify-content:center;gap:12px;
+  padding:14px 0 4px;
+  font-size:11px;color:var(--muted2);
+  width:100%;max-width:760px;margin:0 auto;
+}
+#epub-nav.on{display:flex}
+.enb{
+  height:30px;padding:0 14px;
+  background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:var(--r);
+  color:var(--muted2);cursor:pointer;font-family:'DM Mono',monospace;font-size:11px;
+  display:flex;align-items:center;gap:5px;transition:all var(--ease);
+}
+.enb:hover{background:rgba(255,255,255,0.08);color:var(--text);border-color:rgba(255,255,255,0.15)}
+.enb:disabled{opacity:0.2;pointer-events:none}
+#epub-pginfo{font-size:11px;color:var(--muted2);letter-spacing:.04em}
 
-/* ── DROP SCREEN */
+/* ════ DROP SCREEN ════ */
 #drop{position:fixed;inset:0;z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:var(--bg);transition:opacity var(--ease)}
 #drop.gone{opacity:0;pointer-events:none}
-#drop.over{background:rgba(185,247,81,0.03)}
+#drop.over{background:rgba(185,247,81,0.02)}
 .di-ring{width:76px;height:76px;border:1.5px solid var(--border);border-radius:18px;display:flex;align-items:center;justify-content:center;animation:ring-pulse 3.5s ease-in-out infinite}
 @keyframes ring-pulse{0%,100%{border-color:var(--border);box-shadow:none}50%{border-color:var(--accent-border);box-shadow:0 0 24px rgba(185,247,81,0.08)}}
 .di-title{font-family:'Syne',sans-serif;font-size:20px;font-weight:700;color:var(--text)}
-.di-sub{font-size:11px;color:var(--muted2);letter-spacing:0.04em}
-.di-btn{height:36px;padding:0 18px;background:var(--accent-bg);border:1px solid var(--accent-border);border-radius:var(--r);color:var(--accent);font-family:'DM Mono',monospace;font-size:11px;font-weight:500;cursor:pointer;transition:all var(--ease);letter-spacing:0.03em}
+.di-sub{font-size:11px;color:var(--muted2);letter-spacing:.04em}
+.di-btn{height:36px;padding:0 18px;background:var(--accent-bg);border:1px solid var(--accent-border);border-radius:var(--r);color:var(--accent);font-family:'DM Mono',monospace;font-size:11px;font-weight:500;cursor:pointer;transition:all var(--ease)}
 .di-btn:hover{background:rgba(185,247,81,0.16)}
 
-/* ── SPINNER */
-#spin{position:fixed;inset:0;z-index:400;display:none;align-items:center;justify-content:center;background:rgba(10,10,10,0.7);backdrop-filter:blur(4px)}
+/* ════ SPINNER ════ */
+#spin{position:fixed;inset:0;z-index:400;display:none;align-items:center;justify-content:center;background:rgba(10,10,10,0.65);backdrop-filter:blur(4px)}
 #spin.on{display:flex}
-.sring{width:32px;height:32px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:rot 0.7s linear infinite}
+.sring{width:32px;height:32px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:rot .7s linear infinite}
 @keyframes rot{to{transform:rotate(360deg)}}
 
-/* ── TOAST */
-#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(6px);background:rgba(20,20,20,0.95);border:1px solid var(--border);border-radius:var(--r);padding:9px 16px;font-size:11px;color:var(--text);opacity:0;pointer-events:none;transition:all var(--ease);z-index:600;backdrop-filter:blur(16px);white-space:nowrap}
+/* ════ TOAST ════ */
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(6px);background:rgba(15,15,15,0.96);border:1px solid var(--border);border-radius:var(--r);padding:9px 16px;font-size:11px;color:var(--text);opacity:0;pointer-events:none;transition:all var(--ease);z-index:600;backdrop-filter:blur(16px);white-space:nowrap;max-width:90vw}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
-#toast.err{border-color:rgba(255,80,80,0.3);color:#ff9090}
+#toast.err{border-color:rgba(255,80,80,0.35);color:#ff9090}
 
-/* ── FULLSCREEN */
-:fullscreen #bar,:fullscreen #viewer{/* native fullscreen handled via JS */}
-
-/* ── MOBILE */
-@media(max-width:600px){
+/* ════ MOBILE ════ */
+@media(max-width:640px){
+  :root{--bar-h:44px}
+  #bar{padding:0 6px;gap:0}
   #fname,#mode-badge{display:none}
-  .sep{margin:0 1px}
-  #bar{padding:0 4px;gap:1px}
-  .b{height:28px;min-width:28px;padding:0 6px;font-size:10px}
-  .b.sq{width:28px}
-  #epub{padding:24px 18px;font-size:16px;margin:8px}
-  #cv{margin:8px}
-  .enav{display:none!important}
+  .sep{margin:0 3px}
+  .b{height:30px;min-width:30px;padding:0 5px;font-size:10px}
+  .b.sq{width:30px}
+  #pg-in{width:32px;height:25px;font-size:10px}
+  #zm-val{min-width:32px;font-size:10px}
+  #epub{padding:20px 16px;font-size:15px}
+  #epub-wrap{margin:10px auto;padding-bottom:20px}
+  #cv{margin:10px auto}
 }
 </style>
 </head>
@@ -130,60 +228,83 @@ html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-fam
 <div id="spin"><div class="sring"></div></div>
 <div id="reveal"></div>
 
+<!-- ════ TOOLBAR ════ -->
 <div id="bar">
-  <span id="fname">—</span>
-  <span id="mode-badge">—</span>
-  <div class="sep"></div>
-  <button class="b sq" id="bp" title="Previous ←">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="15,18 9,12 15,6"/></svg>
-  </button>
-  <div id="pg-wrap">
-    <input type="number" id="pg-in" min="1" value="1">
-    <span>/<span id="pg-total">—</span></span>
+  <!-- LEFT: filename + badge -->
+  <div id="bar-left">
+    <span id="fname">—</span>
+    <span id="mode-badge" style="margin-left:5px">—</span>
   </div>
-  <button class="b sq" id="bn" title="Next →">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9,18 15,12 9,6"/></svg>
-  </button>
-  <div class="sep"></div>
-  <button class="b sq" id="bzo" title="Zoom Out −">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-  </button>
-  <span id="zm-val">100%</span>
-  <button class="b sq" id="bzi" title="Zoom In +">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-  </button>
-  <button class="b" id="bfit" title="Fit Width 0">Fit</button>
-  <div class="gap"></div>
-  <button class="b" id="bopen" title="Open local file">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-    Open
-  </button>
-  <button class="b" id="bdl" title="Download">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-    Save
-  </button>
-  <button class="b" id="bcp" title="Copy share link">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-    Share
-  </button>
-  <div class="sep"></div>
-  <button class="b sq hi" id="bfs" title="Fullscreen (F)">
-    <svg id="icE" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-    <svg id="icX" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="display:none"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
-  </button>
+
+  <!-- CENTER: page nav + zoom -->
+  <div id="bar-center">
+    <button class="b sq" id="bp" title="Previous (←)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="15,18 9,12 15,6"/></svg>
+    </button>
+    <div id="pg-wrap">
+      <input type="number" id="pg-in" min="1" value="1">
+      <span>/<span id="pg-total">—</span></span>
+    </div>
+    <button class="b sq" id="bn" title="Next (→)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9,18 15,12 9,6"/></svg>
+    </button>
+
+    <div class="sep"></div>
+
+    <button class="b sq" id="bzo" title="Zoom Out (-)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <span id="zm-val">100%</span>
+    <button class="b sq" id="bzi" title="Zoom In (+)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <button class="b" id="bfit" title="Fit Width (0)">Fit</button>
+  </div>
+
+  <!-- RIGHT: actions + fullscreen -->
+  <div id="bar-right">
+    <button class="b" id="bopen" title="Open local file">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <span class="btn-label">Open</span>
+    </button>
+    <button class="b" id="bdl" title="Download">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span class="btn-label">Save</span>
+    </button>
+    <button class="b" id="bcp" title="Copy share link">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      <span class="btn-label">Share</span>
+    </button>
+    <div class="sep"></div>
+    <button class="b sq hi" id="bfs" title="Fullscreen (F)">
+      <svg id="icE" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+      <svg id="icX" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="display:none"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
+    </button>
+  </div>
 </div>
 
+<!-- ════ CONTENT ════ -->
 <div id="viewer">
+  <!-- PDF -->
   <canvas id="cv"></canvas>
-  <div id="epub"></div>
-</div>
 
-<button class="enav L" id="eL">
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15,18 9,12 15,6"/></svg>
-</button>
-<button class="enav R" id="eR">
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9,18 15,12 9,6"/></svg>
-</button>
+  <!-- EPUB: wrapper grows naturally, no clipping -->
+  <div id="epub-wrap">
+    <div id="epub"></div>
+    <!-- Bottom prev/next for EPUB inside scroll flow -->
+    <div id="epub-nav">
+      <button class="enb" id="enL">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15,18 9,12 15,6"/></svg>
+        Prev chapter
+      </button>
+      <span id="epub-pginfo">— / —</span>
+      <button class="enb" id="enR">
+        Next chapter
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9,18 15,12 9,6"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
 
 <div id="toast"></div>
 
@@ -192,32 +313,25 @@ html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-fam
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const $=id=>document.getElementById(id);
 const bar=$('bar'),viewer=$('viewer'),cv=$('cv'),ctx=cv.getContext('2d');
-const epubEl=$('epub'),drop=$('drop'),spin=$('spin'),toast=$('toast'),reveal=$('reveal');
-const S={mode:null,pdf:null,page:1,total:0,scale:1.0,fileUrl:null,fileData:null,fileName:'',epub:{zip:null,spine:[],cur:0,opfDir:''},rendering:false,barVisible:true,hideTimer:null,parser:new DOMParser()};
+const epubWrap=$('epub-wrap'),epubEl=$('epub'),drop=$('drop'),spin=$('spin'),toast=$('toast'),reveal=$('reveal');
+const S={mode:null,pdf:null,page:1,total:0,scale:1.0,fileUrl:null,fileData:null,fileName:'',
+  epub:{zip:null,spine:[],cur:0,opfDir:''},rendering:false,barVisible:true,hideTimer:null,
+  parser:new DOMParser()};
 
-// ── HELPER: detect file type from name or content-type
-function detectType(name, contentType) {
-  const ext = name.split('.').pop().toLowerCase();
-  if (ext === 'pdf') return 'pdf';
-  if (ext === 'epub') return 'epub';
-  // Fall back to Content-Type header
-  if (contentType) {
-    const ct = contentType.toLowerCase();
-    if (ct.includes('pdf')) return 'pdf';
-    if (ct.includes('epub') || ct.includes('zip')) return 'epub'; // epubs are zips
-  }
+// ── DETECT type from name or Content-Type header
+function detectType(name,ct){
+  const e=name.split('.').pop().toLowerCase();
+  if(e==='pdf')return'pdf';
+  if(e==='epub')return'epub';
+  if(ct){const c=ct.toLowerCase();if(c.includes('pdf'))return'pdf';if(c.includes('epub')||c.includes('zip'))return'epub'}
   return null;
 }
-
-// ── HELPER: extract filename from Content-Disposition header
-function getFilenameFromHeaders(headers) {
-  const cd = headers.get('Content-Disposition') || '';
-  // Try filename*= (RFC 5987) first
-  let m = cd.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
-  if (m) return decodeURIComponent(m[1].trim().replace(/^["']|["']$/g, ''));
-  // Then filename=
-  m = cd.match(/filename=["']?([^;"']+)["']?/i);
-  if (m) return m[1].trim();
+function getFilenameFromHeaders(headers){
+  const cd=headers.get('Content-Disposition')||'';
+  let m=cd.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
+  if(m)return decodeURIComponent(m[1].trim().replace(/^["']|["']$/g,''));
+  m=cd.match(/filename=["']?([^;"'\r\n]+)["']?/i);
+  if(m)return m[1].trim();
   return null;
 }
 
@@ -228,66 +342,44 @@ bar.addEventListener('mouseleave',()=>{onBar=false;sched()});
 reveal.addEventListener('mouseenter',showBar);
 reveal.addEventListener('mousemove',showBar);
 viewer.addEventListener('mousemove',()=>{showBar();sched()});
-function showBar(){bar.classList.remove('hide');viewer.classList.remove('nobar');S.barVisible=true;clearTimeout(S.hideTimer)}
-function sched(){clearTimeout(S.hideTimer);S.hideTimer=setTimeout(()=>{if(!onBar){bar.classList.add('hide');viewer.classList.add('nobar');S.barVisible=false}},2800)}
+function showBar(){bar.classList.remove('hide');viewer.style.paddingTop='var(--bar-h)';S.barVisible=true;clearTimeout(S.hideTimer)}
+function sched(){clearTimeout(S.hideTimer);S.hideTimer=setTimeout(()=>{if(!onBar){bar.classList.add('hide');viewer.style.paddingTop='0';S.barVisible=false}},3000)}
 
 // ── TOAST
 let tT;
 function showToast(msg,dur=2400,isErr=false){
-  toast.textContent=msg;
-  toast.classList.toggle('err',isErr);
-  toast.classList.add('on');
-  clearTimeout(tT);
+  toast.textContent=msg;toast.classList.toggle('err',isErr);
+  toast.classList.add('on');clearTimeout(tT);
   tT=setTimeout(()=>toast.classList.remove('on'),dur);
 }
 
-// ── URL PARAM AUTO-LOAD (THE MAIN FIX)
+// ── URL PARAM AUTO-LOAD
 (async function(){
   const p=new URLSearchParams(location.search);
   const path=p.get('path');
   if(!path)return;
-
   const fileUrl='/file?path='+encodeURIComponent(path);
-  // Get name hint from path (may have no extension if it's a Telegram ID)
   const pathName=path.split('/').pop()||'document';
-  S.fileUrl=fileUrl;
-  drop.classList.add('gone');
-  spin.classList.add('on');
-
+  S.fileUrl=fileUrl;drop.classList.add('gone');spin.classList.add('on');
   try{
     const resp=await fetch(fileUrl);
     if(!resp.ok)throw new Error('HTTP '+resp.status);
-
-    // ── KEY FIX: Get real filename from Content-Disposition header
     const realName=getFilenameFromHeaders(resp.headers)||pathName;
-    S.fileName=realName;
-    $('fname').textContent=realName;
-
-    // ── KEY FIX: Detect type from real name + content-type header
+    S.fileName=realName;$('fname').textContent=realName;
     const contentType=resp.headers.get('Content-Type')||'';
-    const fileType=detectType(realName, contentType);
-
-    const ab=await resp.arrayBuffer();
-    S.fileData=ab;
-
-    if(fileType==='pdf'){
-      await loadPDF(ab);
-    } else if(fileType==='epub'){
-      await loadEPUB(ab);
-    } else {
-      // Last resort: sniff the magic bytes
+    const fileType=detectType(realName,contentType);
+    const ab=await resp.arrayBuffer();S.fileData=ab;
+    if(fileType==='pdf')await loadPDF(ab);
+    else if(fileType==='epub')await loadEPUB(ab);
+    else{
       const bytes=new Uint8Array(ab,0,8);
-      const isPDF=bytes[0]===0x25&&bytes[1]===0x50&&bytes[2]===0x44&&bytes[3]===0x46; // %PDF
-      const isZIP=bytes[0]===0x50&&bytes[1]===0x4B; // PK (ZIP/EPUB)
-      if(isPDF){ S.fileName=realName.endsWith('.pdf')?realName:realName+'.pdf'; await loadPDF(ab); }
-      else if(isZIP){ S.fileName=realName.endsWith('.epub')?realName:realName+'.epub'; await loadEPUB(ab); }
-      else{ spin.classList.remove('on'); showToast('Unsupported file format',3000,true); drop.classList.remove('gone'); }
+      const isPDF=bytes[0]===0x25&&bytes[1]===0x50&&bytes[2]===0x44&&bytes[3]===0x46;
+      const isZIP=bytes[0]===0x50&&bytes[1]===0x4B;
+      if(isPDF)await loadPDF(ab);
+      else if(isZIP)await loadEPUB(ab);
+      else{spin.classList.remove('on');showToast('Unsupported file format',3500,true);drop.classList.remove('gone')}
     }
-  }catch(e){
-    spin.classList.remove('on');
-    showToast('Failed to load: '+e.message,4000,true);
-    drop.classList.remove('gone');
-  }
+  }catch(e){spin.classList.remove('on');showToast('Failed to load: '+e.message,4000,true);drop.classList.remove('gone')}
 })();
 
 // ── LOCAL FILE
@@ -306,13 +398,13 @@ async function openLocal(file){
   else{showToast('Unsupported. Use PDF or EPUB.',3000,true);spin.classList.remove('on');drop.classList.remove('gone')}
 }
 
-// ══ PDF
+// ════ PDF ════
 async function loadPDF(ab){
   try{
     S.mode='pdf';
     S.pdf=await pdfjsLib.getDocument({data:ab.slice(0)}).promise;
     S.total=S.pdf.numPages;S.page=1;
-    cv.style.display='block';epubEl.classList.remove('on');setEpubNav(false);
+    cv.style.display='block';epubWrap.classList.remove('on');setEpubNavVisible(false);
     $('mode-badge').textContent='PDF';
     await fitScale();await renderPage(1);
     spin.classList.remove('on');sched();
@@ -338,15 +430,17 @@ async function renderPage(num){
   finally{S.rendering=false}
 }
 
-// ══ EPUB
+// ════ EPUB ════
 async function loadEPUB(ab){
   try{
     S.mode='epub';
     const zip=await JSZip.loadAsync(ab);S.epub.zip=zip;
+    // Parse container
     const cont=await zip.file('META-INF/container.xml').async('string');
     const contDoc=S.parser.parseFromString(cont,'text/xml');
     const opfPath=contDoc.querySelector('rootfile').getAttribute('full-path');
     S.epub.opfDir=opfPath.includes('/')?opfPath.slice(0,opfPath.lastIndexOf('/')+1):'';
+    // Parse OPF
     const opfXml=await zip.file(opfPath).async('string');
     const opfDoc=S.parser.parseFromString(opfXml,'text/xml');
     const mani={};
@@ -354,11 +448,13 @@ async function loadEPUB(ab){
     S.epub.spine=[];
     opfDoc.querySelectorAll('spine itemref').forEach(r=>{const h=mani[r.getAttribute('idref')];if(h)S.epub.spine.push(S.epub.opfDir+h)});
     S.total=S.epub.spine.length;S.epub.cur=0;
-    cv.style.display='none';epubEl.classList.add('on');setEpubNav(true);
-    $('mode-badge').textContent='EPUB';syncUI();
-    await renderEPUB(0);spin.classList.remove('on');sched();
+    cv.style.display='none';epubWrap.classList.add('on');
+    $('mode-badge').textContent='EPUB';
+    await renderEPUB(0);
+    spin.classList.remove('on');sched();
   }catch(e){spin.classList.remove('on');showToast('EPUB error: '+e.message,4000,true);console.error(e)}
 }
+
 async function renderEPUB(idx){
   if(idx<0||idx>=S.epub.spine.length)return;
   spin.classList.add('on');
@@ -368,46 +464,88 @@ async function renderEPUB(idx){
     if(!f){showToast('Chapter not found',3000,true);return}
     let html=await f.async('string');
     const dir=path.includes('/')?path.slice(0,path.lastIndexOf('/')+1):'';
+
+    // ── Inline images as base64
     const imgs=[...html.matchAll(/src=["']([^"'#?]+)["']/g)];
     for(const m of imgs){
       const src=m[1];if(src.startsWith('data:')||src.startsWith('http'))continue;
       const ip=dir+src;
       const img=S.epub.zip.file(ip)||S.epub.zip.file(decodeURIComponent(ip));
-      if(img){const b64=await img.async('base64');const mt=/\.png$/i.test(ip)?'image/png':/\.gif$/i.test(ip)?'image/gif':/\.svg$/i.test(ip)?'image/svg+xml':'image/jpeg';html=html.replace(m[0],`src="data:${mt};base64,${b64}"`)}
+      if(img){
+        const b64=await img.async('base64');
+        const mt=/\.png$/i.test(ip)?'image/png':/\.gif$/i.test(ip)?'image/gif':/\.svg$/i.test(ip)?'image/svg+xml':'image/jpeg';
+        html=html.replace(m[0],`src="data:${mt};base64,${b64}"`);
+      }
     }
-    const cssM=[...html.matchAll(/href=["']([^"']+\.css[^"']*)['"]/g)];
+
+    // ── Inline CSS but strip dark/problematic rules
+    const cssMatches=[...html.matchAll(/href=["']([^"']+\.css[^"']*)['"]/g)];
     let iStyle='';
-    for(const m of cssM){
+    for(const m of cssMatches){
       const cp=dir+m[1].split('?')[0];
       const cf=S.epub.zip.file(cp)||S.epub.zip.file(decodeURIComponent(cp));
-      if(cf){let css=await cf.async('string');css=css.replace(/@font-face[^}]+}/g,'');iStyle+=css+'\n'}
+      if(cf){
+        let css=await cf.async('string');
+        // Strip @font-face (avoids 404 font loads)
+        css=css.replace(/@font-face\s*\{[^}]*\}/g,'');
+        // Strip rules that set dark/black backgrounds on body/html/root
+        css=css.replace(/(body|html|\*)\s*\{[^}]*(background(-color)?:\s*(#[0-9a-f]{3,6}|rgb[^)]+\)|black|dark)[^}]*)\}/gi,'');
+        // Strip color:white / color:#fff type rules that would make text invisible
+        css=css.replace(/color\s*:\s*(white|#fff|#ffffff|rgba?\([^)]*255[^)]*\))/gi,'color:#111');
+        iStyle+=css+'\n';
+      }
     }
+
+    // ── Parse and extract body content
     const parsed=S.parser.parseFromString(html,'text/html');
+    // Remove <link> and <style> tags from parsed (we handle CSS ourselves)
+    parsed.querySelectorAll('link[rel="stylesheet"]').forEach(el=>el.remove());
+    // Keep internal <style> tags but sanitize them too
+    parsed.querySelectorAll('style').forEach(el=>{
+      let css=el.textContent;
+      css=css.replace(/@font-face\s*\{[^}]*\}/g,'');
+      css=css.replace(/(body|html|\*)\s*\{[^}]*(background(-color)?:\s*(#[0-9a-f]{3,6}|rgb[^)]+\)|black|dark)[^}]*)\}/gi,'');
+      css=css.replace(/color\s*:\s*(white|#fff|#ffffff|rgba?\([^)]*255[^)]*\))/gi,'color:#111');
+      el.textContent=css;
+    });
+
     const body=parsed.body?parsed.body.innerHTML:html;
     epubEl.innerHTML=(iStyle?`<style>${iStyle}</style>`:'')+body;
-    S.epub.cur=idx;S.page=idx+1;syncUI();setEpubNav(true);
-    viewer.scrollTo({top:0,behavior:'instant'});
+
+    S.epub.cur=idx;S.page=idx+1;
+    syncUI();setEpubNavVisible(true);
+    // Scroll viewer (not window) back to top
+    viewer.scrollTop=0;
   }finally{spin.classList.remove('on')}
 }
-function setEpubNav(show){
-  const l=$('eL'),r=$('eR');
-  if(!show){l.classList.remove('on');r.classList.remove('on');return}
-  l.classList.toggle('on',S.epub.cur>0);
-  r.classList.toggle('on',S.epub.cur<S.epub.spine.length-1);
+
+function setEpubNavVisible(show){
+  $('epub-nav').classList.toggle('on',show&&S.epub.spine.length>1);
+  if(show){
+    $('enL').disabled=S.epub.cur<=0;
+    $('enR').disabled=S.epub.cur>=S.epub.spine.length-1;
+    $('epub-pginfo').textContent=(S.epub.cur+1)+' / '+S.epub.spine.length;
+  }
 }
 
-// ══ NAV
+// Bottom EPUB nav buttons
+$('enL').addEventListener('click',()=>go(-1));
+$('enR').addEventListener('click',()=>go(1));
+
+// ════ NAV ════
 function go(dir){
   if(S.mode==='pdf'){const np=S.page+dir;if(np>=1&&np<=S.total)renderPage(np)}
   else if(S.mode==='epub'){const ni=S.epub.cur+dir;if(ni>=0&&ni<S.epub.spine.length)renderEPUB(ni)}
 }
 $('bp').addEventListener('click',()=>go(-1));
 $('bn').addEventListener('click',()=>go(1));
-$('eL').addEventListener('click',()=>go(-1));
-$('eR').addEventListener('click',()=>go(1));
-$('pg-in').addEventListener('change',()=>{const v=parseInt($('pg-in').value);if(!isNaN(v)&&v>=1&&v<=S.total){if(S.mode==='pdf')renderPage(v);else renderEPUB(v-1)}else $('pg-in').value=S.page});
+$('pg-in').addEventListener('change',()=>{
+  const v=parseInt($('pg-in').value);
+  if(!isNaN(v)&&v>=1&&v<=S.total){if(S.mode==='pdf')renderPage(v);else renderEPUB(v-1)}
+  else $('pg-in').value=S.page;
+});
 
-// ══ ZOOM (PDF only)
+// ════ ZOOM (PDF only) ════
 function zoom(f){if(S.mode!=='pdf')return;S.scale=Math.min(Math.max(S.scale*f,0.15),6);$('zm-val').textContent=Math.round(S.scale*100)+'%';renderPage(S.page)}
 async function fitWidth(){
   if(S.mode!=='pdf'||!S.pdf)return;
@@ -419,7 +557,7 @@ $('bzo').addEventListener('click',()=>zoom(1/1.2));
 $('bfit').addEventListener('click',fitWidth);
 viewer.addEventListener('wheel',e=>{if((e.ctrlKey||e.metaKey)&&S.mode==='pdf'){e.preventDefault();zoom(e.deltaY<0?1.1:1/1.1)}},{passive:false});
 
-// ══ DOWNLOAD / SHARE
+// ════ DOWNLOAD / SHARE ════
 $('bdl').addEventListener('click',()=>{
   if(!S.fileData)return;
   const url=URL.createObjectURL(new Blob([S.fileData]));
@@ -432,39 +570,30 @@ $('bcp').addEventListener('click',()=>{
   navigator.clipboard?.writeText(url).then(()=>showToast('Link copied!')).catch(()=>showToast('Copy failed',2400,true));
 });
 
-// ══ FULLSCREEN (content area only — bar stays)
+// ════ FULLSCREEN ════
 $('bfs').addEventListener('click',toggleFullscreen);
 function toggleFullscreen(){
-  if(document.fullscreenElement){
-    document.exitFullscreen();
-  } else {
-    // Use document.documentElement so bar stays accessible
-    document.documentElement.requestFullscreen();
-  }
+  document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
 }
 document.addEventListener('fullscreenchange',()=>{
   const fs=!!document.fullscreenElement;
   $('icE').style.display=fs?'none':'';
   $('icX').style.display=fs?'':'none';
-  $('bfs').classList.toggle('hi',!fs); // hi when NOT fullscreen = invite to enter
-  if(fs){
-    // Force bar visible in fullscreen
-    showBar();
-    sched();
-  }
+  $('bfs').classList.toggle('hi',!fs);
+  if(fs){showBar();sched()}
 });
 
-// ══ SYNC UI
+// ════ SYNC UI ════
 function syncUI(){
   $('pg-in').value=S.page;$('pg-in').max=S.total;
   $('pg-total').textContent=S.total||'—';
   $('bp').disabled=S.page<=1;$('bn').disabled=S.page>=S.total;
   $('zm-val').textContent=Math.round(S.scale*100)+'%';
-  const pdfMode=S.mode==='pdf';
-  [$('bzi'),$('bzo'),$('bfit')].forEach(b=>{b.style.opacity=pdfMode?'1':'0.3';b.style.pointerEvents=pdfMode?'':'none'});
+  const pdf=S.mode==='pdf';
+  [$('bzi'),$('bzo'),$('bfit')].forEach(b=>{b.style.opacity=pdf?'1':'0.25';b.style.pointerEvents=pdf?'auto':'none'});
 }
 
-// ══ KEYBOARD
+// ════ KEYBOARD ════
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT')return;
   switch(e.key){
@@ -476,17 +605,20 @@ document.addEventListener('keydown',e=>{
     case'-':e.preventDefault();zoom(1/1.2);break;
     case'0':e.preventDefault();fitWidth();break;
     case'f':case'F':toggleFullscreen();break;
-    case'h':case'H':S.barVisible?(bar.classList.add('hide'),viewer.classList.add('nobar'),S.barVisible=false):showBar();break;
+    case'h':case'H':S.barVisible?(bar.classList.add('hide'),viewer.style.paddingTop='0',S.barVisible=false):showBar();break;
     case'Escape':if(document.fullscreenElement)document.exitFullscreen();break;
   }
 });
 
-// ══ TOUCH SWIPE
+// ════ TOUCH SWIPE ════
 let tx=0,ty=0;
 viewer.addEventListener('touchstart',e=>{tx=e.touches[0].clientX;ty=e.touches[0].clientY},{passive:true});
-viewer.addEventListener('touchend',e=>{const dx=tx-e.changedTouches[0].clientX;const dy=ty-e.changedTouches[0].clientY;if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>55)go(dx>0?1:-1)},{passive:true});
+viewer.addEventListener('touchend',e=>{
+  const dx=tx-e.changedTouches[0].clientX;const dy=ty-e.changedTouches[0].clientY;
+  if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>55)go(dx>0?1:-1);
+},{passive:true});
 
-// ══ RESIZE
+// ════ RESIZE ════
 let rz;
 window.addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>{if(S.mode==='pdf')renderPage(S.page)},180)});
 </script>
