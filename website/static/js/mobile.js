@@ -49,12 +49,14 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function openMobileMenu() {
         sidebar.classList.add('open');
+        sidebar.classList.add('mobile-open');
         bgBlur.style.zIndex = '150';
         bgBlur.style.opacity = '0.3';
     }
     
     function closeMobileMenu() {
         sidebar.classList.remove('open');
+        sidebar.classList.remove('mobile-open');
         bgBlur.style.opacity = '0';
         setTimeout(() => {
             if (!bgBlur.style.opacity || bgBlur.style.opacity === '0') {
