@@ -113,7 +113,13 @@ async def stream_media(channel: int, message_id: int, filename: str, request: Re
                 logger.error(f"Stream error: {e}")
                 raise
 
-        mime_type = mimetypes.guess_type(filename.lower())[0] or "video/mp4"
+        mime_type = mimetypes.guess_type(filename.lower())[0] or "application/octet-stream"
+        # Explicit overrides for common types that mimetypes may miss
+        ext = Path(filename).suffix.lower()
+        if ext == '.pdf':
+            mime_type = 'application/pdf'
+        elif ext == '.epub':
+            mime_type = 'application/epub+zip'
         is_range = bool(range_header)
         status = 206 if is_range else 200
 
@@ -203,7 +209,10 @@ async def file_head(request: Request):
 
     try:
         file = DRIVE_DATA.get_file(path)
-        mime = mimetypes.guess_type(file.name.lower())[0] or "video/mp4"
+        ext = Path(file.name).suffix.lower()
+        mime = ('application/pdf' if ext == '.pdf' else
+                'application/epub+zip' if ext == '.epub' else
+                mimetypes.guess_type(file.name.lower())[0] or "application/octet-stream")
         return Response(
             status_code=200,
             headers={
@@ -247,11 +256,6 @@ async def serve_file(request: Request):
     channel = file.source_channel if hasattr(file, "is_fast_import") and file.is_fast_import and file.source_channel else STORAGE_CHANNEL
 
     return await stream_media(channel, file.file_id, file.name, request)
-
-
-async def stream_media(channel: int, message_id: int, filename: str, request: Request):
-    """Unified streaming function"""
-    return await stream_media_core(channel, message_id, filename, request)
 
 
 # Secure token access (optional but recommended)
