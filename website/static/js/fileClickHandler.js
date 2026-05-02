@@ -14,7 +14,8 @@ function openFile() {
 
     // Check if it's a PDF or EPUB file — open in the built-in viewer
     if (fileName.endsWith('.pdf') || fileName.endsWith('.epub')) {
-        const viewerPath = '/pdf-viewer?path=' + this.getAttribute('data-path') + '/' + this.getAttribute('data-id')
+        const rawPath = this.getAttribute('data-path') + '/' + this.getAttribute('data-id')
+        const viewerPath = '/pdf-viewer?path=' + encodeURIComponent(rawPath)
         window.open(viewerPath, '_blank')
         return
     }
@@ -412,7 +413,7 @@ async function shareFile() {
     let link
     if (fileName.endsWith('.pdf') || fileName.endsWith('.epub')) {
         // Share viewer link for PDF and EPUB
-        link = `${root_url}/pdf-viewer?path=${path}`
+        link = `${root_url}/pdf-viewer?path=${encodeURIComponent(path)}`
     } else if (fileName.endsWith('.mp4') || fileName.endsWith('.mkv') || fileName.endsWith('.webm') || fileName.endsWith('.mov') || fileName.endsWith('.avi') || fileName.endsWith('.ts') || fileName.endsWith('.ogv')) {
         link = `${root_url}/stream?url=${root_url}/file?path=${path}`
     } else {
