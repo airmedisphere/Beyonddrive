@@ -42,6 +42,11 @@ AUDIO_MIME_TYPES = {
     '.wma': 'audio/x-ms-wma',
 }
 
+DOCUMENT_MIME_TYPES = {
+    '.pdf':  'application/pdf',
+    '.epub': 'application/epub+zip',
+}
+
 
 def parse_range_header(range_header: str, file_size: int) -> tuple:
     """
@@ -115,6 +120,10 @@ def get_mime_type(file_name: str) -> str:
     # Then audio types
     if ext in AUDIO_MIME_TYPES:
         return AUDIO_MIME_TYPES[ext]
+    
+    # Then document types (PDF, EPUB)
+    if ext in DOCUMENT_MIME_TYPES:
+        return DOCUMENT_MIME_TYPES[ext]
     
     # Fall back to mimetypes module
     mime_type = mimetypes.guess_type(file_name.lower())[0]
@@ -214,7 +223,11 @@ async def media_streamer(channel: int, message_id: int, file_name: str, request)
     
     offset = from_bytes - (from_bytes % chunk_size)
     first_part_cut = from_bytes - offset
+    # last_part_cut: how many bytes to keep from the last chunk.
+    # If until_bytes is the last byte of a chunk, we keep the full chunk.
     last_part_cut = (until_bytes % chunk_size) + 1
+    if last_part_cut == chunk_size:
+        last_part_cut = chunk_size  # keep full last chunk (already correct)
 
     req_length = until_bytes - from_bytes + 1
     part_count = math.ceil((until_bytes + 1) / chunk_size) - math.floor(offset / chunk_size)
@@ -230,7 +243,7 @@ async def media_streamer(channel: int, message_id: int, file_name: str, request)
     mime_type = get_mime_type(file_name)
     
     # Use inline disposition for streamable content
-    disposition = "inline" if any(x in mime_type for x in ["video/", "audio/", "image/", "/html", "/pdf"]) else "attachment"
+    disposition = "inline" if any(x in mime_type for x in ["video/", "audio/", "image/", "/html", "/pdf", "epub"]) else "attachment"
 
     # Determine status code
     is_range_request = bool(range_header)
