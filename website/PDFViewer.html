@@ -310,11 +310,18 @@ html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-fam
 
 <script>
 'use strict';
+// PDF.js worker — primary CDN with fallback
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+// If the worker fails (e.g. CDN blocked), fall back to inline fake-worker (slower but works)
+window.addEventListener('error',function(e){
+  if(e.filename&&e.filename.includes('pdf.worker')){
+    pdfjsLib.GlobalWorkerOptions.workerSrc='';
+  }
+},{once:true,capture:true});
 const $=id=>document.getElementById(id);
 const bar=$('bar'),viewer=$('viewer'),cv=$('cv'),ctx=cv.getContext('2d');
 const epubWrap=$('epub-wrap'),epubEl=$('epub'),drop=$('drop'),spin=$('spin'),toast=$('toast'),reveal=$('reveal');
-const S={mode:null,pdf:null,page:1,total:0,scale:1.0,fileUrl:null,fileData:null,fileName:'',
+const S={mode:null,pdf:null,page:1,total:0,scale:1.0,fileUrl:null,fileData:null,fileName:'',pendingPage:null,
   epub:{zip:null,spine:[],cur:0,opfDir:''},rendering:false,barVisible:true,hideTimer:null,
   parser:new DOMParser()};
 
@@ -353,6 +360,50 @@ function showToast(msg,dur=2400,isErr=false){
   tT=setTimeout(()=>toast.classList.remove('on'),dur);
 }
 
+// ── FETCH WITH TIMEOUT + PROGRESS
+async function fetchWithProgress(url, onProgress, timeoutMs=60000){
+  // Use AbortController for timeout
+  const ctrl=new AbortController();
+  const tid=setTimeout(()=>ctrl.abort(),timeoutMs);
+  try{
+    const resp=await fetch(url,{signal:ctrl.signal});
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    clearTimeout(tid);
+
+    const total=parseInt(resp.headers.get('Content-Length')||'0',10);
+    const reader=resp.response ? resp : resp; // guard
+    // Stream body into Uint8Array chunks for progress tracking
+    const bodyReader=resp.body.getReader();
+    const chunks=[];let loaded=0;
+    while(true){
+      const {done,value}=await bodyReader.read();
+      if(done)break;
+      chunks.push(value);
+      loaded+=value.byteLength;
+      if(total>0&&onProgress)onProgress(loaded,total);
+    }
+    // Assemble all chunks into one ArrayBuffer
+    const result=new Uint8Array(loaded);
+    let pos=0;
+    for(const c of chunks){result.set(c,pos);pos+=c.byteLength;}
+    return {arrayBuffer:result.buffer,headers:resp.headers};
+  }catch(e){
+    clearTimeout(tid);
+    if(e.name==='AbortError')throw new Error('Load timed out – file may be too large or server is slow');
+    throw e;
+  }
+}
+
+// ── RETRY WRAPPER (up to 3 attempts)
+async function fetchWithRetry(url, onProgress, maxTries=3){
+  let last;
+  for(let i=0;i<maxTries;i++){
+    try{return await fetchWithProgress(url,onProgress,90000);}
+    catch(e){last=e;if(i<maxTries-1){showToast(`Retrying… (${i+2}/${maxTries})`,1800);await new Promise(r=>setTimeout(r,1200));}}
+  }
+  throw last;
+}
+
 // ── URL PARAM AUTO-LOAD
 (async function(){
   const p=new URLSearchParams(location.search);
@@ -361,14 +412,19 @@ function showToast(msg,dur=2400,isErr=false){
   const fileUrl='/file?path='+encodeURIComponent(path);
   const pathName=path.split('/').pop()||'document';
   S.fileUrl=fileUrl;drop.classList.add('gone');spin.classList.add('on');
+  // Show progress in toast
+  let lastPct=-1;
+  function onProg(loaded,total){
+    const pct=Math.round(loaded/total*100);
+    if(pct!==lastPct&&pct%10===0){lastPct=pct;showToast('Loading… '+pct+'%',1200);}
+  }
   try{
-    const resp=await fetch(fileUrl);
-    if(!resp.ok)throw new Error('HTTP '+resp.status);
-    const realName=getFilenameFromHeaders(resp.headers)||pathName;
+    const {arrayBuffer:ab,headers}=await fetchWithRetry(fileUrl,onProg);
+    S.fileData=ab;
+    const realName=getFilenameFromHeaders(headers)||pathName;
     S.fileName=realName;$('fname').textContent=realName;
-    const contentType=resp.headers.get('Content-Type')||'';
+    const contentType=headers.get('Content-Type')||'';
     const fileType=detectType(realName,contentType);
-    const ab=await resp.arrayBuffer();S.fileData=ab;
     if(fileType==='pdf')await loadPDF(ab);
     else if(fileType==='epub')await loadEPUB(ab);
     else{
@@ -379,7 +435,7 @@ function showToast(msg,dur=2400,isErr=false){
       else if(isZIP)await loadEPUB(ab);
       else{spin.classList.remove('on');showToast('Unsupported file format',3500,true);drop.classList.remove('gone')}
     }
-  }catch(e){spin.classList.remove('on');showToast('Failed to load: '+e.message,4000,true);drop.classList.remove('gone')}
+  }catch(e){spin.classList.remove('on');showToast('Failed to load: '+e.message,5000,true);drop.classList.remove('gone')}
 })();
 
 // ── LOCAL FILE
@@ -402,13 +458,27 @@ async function openLocal(file){
 async function loadPDF(ab){
   try{
     S.mode='pdf';
-    S.pdf=await pdfjsLib.getDocument({data:ab.slice(0)}).promise;
+    // Use cMapUrl for better CJK font support; disableRange=false allows range requests
+    const loadTask=pdfjsLib.getDocument({
+      data:ab.slice(0),
+      cMapUrl:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+      cMapPacked:true,
+      disableStream:false,
+      disableRange:false,
+    });
+    S.pdf=await loadTask.promise;
     S.total=S.pdf.numPages;S.page=1;
     cv.style.display='block';epubWrap.classList.remove('on');setEpubNavVisible(false);
     $('mode-badge').textContent='PDF';
     await fitScale();await renderPage(1);
     spin.classList.remove('on');sched();
-  }catch(e){spin.classList.remove('on');showToast('PDF error: '+e.message,4000,true)}
+  }catch(e){
+    spin.classList.remove('on');
+    const msg=e.name==='PasswordException'?'PDF is password-protected':
+              e.name==='InvalidPDFException'?'Invalid or corrupted PDF':
+              'PDF error: '+e.message;
+    showToast(msg,5000,true);
+  }
 }
 async function fitScale(){
   const page=await S.pdf.getPage(1);const vp=page.getViewport({scale:1});
@@ -417,17 +487,25 @@ async function fitScale(){
   $('zm-val').textContent=Math.round(S.scale*100)+'%';
 }
 async function renderPage(num){
-  if(S.rendering||!S.pdf)return;S.rendering=true;
-  try{
-    const page=await S.pdf.getPage(num);
-    const dpr=Math.min(window.devicePixelRatio||1,2);
-    const vp=page.getViewport({scale:S.scale*dpr});
-    cv.width=vp.width;cv.height=vp.height;
-    cv.style.width=(vp.width/dpr)+'px';cv.style.height=(vp.height/dpr)+'px';
-    await page.render({canvasContext:ctx,viewport:vp}).promise;
-    S.page=num;syncUI();viewer.scrollTo({top:0,behavior:'instant'});
-  }catch(e){showToast('Render error: '+e.message,3000,true)}
-  finally{S.rendering=false}
+  // Queue the request so rapid navigation always renders the latest page
+  S.pendingPage=num;
+  if(S.rendering||!S.pdf)return;
+  while(S.pendingPage!==null){
+    const target=S.pendingPage;S.pendingPage=null;
+    S.rendering=true;
+    try{
+      const page=await S.pdf.getPage(target);
+      const dpr=Math.min(window.devicePixelRatio||1,2);
+      const vp=page.getViewport({scale:S.scale*dpr});
+      cv.width=vp.width;cv.height=vp.height;
+      cv.style.width=(vp.width/dpr)+'px';cv.style.height=(vp.height/dpr)+'px';
+      const renderTask=page.render({canvasContext:ctx,viewport:vp});
+      await renderTask.promise;
+      S.page=target;syncUI();viewer.scrollTo({top:0,behavior:'instant'});
+    }catch(e){
+      if(e.name!=='RenderingCancelledException')showToast('Render error: '+e.message,3000,true);
+    }finally{S.rendering=false;}
+  }
 }
 
 // ════ EPUB ════
@@ -465,49 +543,40 @@ async function renderEPUB(idx){
     let html=await f.async('string');
     const dir=path.includes('/')?path.slice(0,path.lastIndexOf('/')+1):'';
 
-    // ── Inline images as base64
-    const imgs=[...html.matchAll(/src=["']([^"'#?]+)["']/g)];
-    for(const m of imgs){
-      const src=m[1];if(src.startsWith('data:')||src.startsWith('http'))continue;
-      const ip=dir+src;
-      const img=S.epub.zip.file(ip)||S.epub.zip.file(decodeURIComponent(ip));
-      if(img){
+    // ── Inline images as base64 — parallel
+    const imgMatches=[...html.matchAll(/src=["']([^"'#?]+)["']/g)];
+    await Promise.all(imgMatches
+      .filter(m=>!m[1].startsWith('data:')&&!m[1].startsWith('http'))
+      .map(async m=>{
+        const ip=dir+m[1];
+        const img=S.epub.zip.file(ip)||S.epub.zip.file(decodeURIComponent(ip));
+        if(!img)return;
         const b64=await img.async('base64');
         const mt=/\.png$/i.test(ip)?'image/png':/\.gif$/i.test(ip)?'image/gif':/\.svg$/i.test(ip)?'image/svg+xml':'image/jpeg';
         html=html.replace(m[0],`src="data:${mt};base64,${b64}"`);
-      }
-    }
+      }));
 
-    // ── Inline CSS but strip dark/problematic rules
-    const cssMatches=[...html.matchAll(/href=["']([^"']+\.css[^"']*)['"]/g)];
-    let iStyle='';
-    for(const m of cssMatches){
+    // ── Inline CSS but strip dark/problematic rules — parallel
+    const cssMatches=[...html.matchAll(/href=["']([^"']+\.css[^"']*)["']/g)];
+    function sanitizeCSS(css){
+      css=css.replace(/@font-face\s*\{[^}]*\}/g,'');
+      css=css.replace(/(body|html|\*)\s*\{[^}]*(background(-color)?:\s*(#[0-9a-f]{3,6}|rgb[^)]+\)|black|dark)[^}]*)\}/gi,'');
+      css=css.replace(/color\s*:\s*(white|#fff|#ffffff|rgba?\([^)]*255[^)]*\))/gi,'color:#111');
+      return css;
+    }
+    const cssParts=await Promise.all(cssMatches.map(async m=>{
       const cp=dir+m[1].split('?')[0];
       const cf=S.epub.zip.file(cp)||S.epub.zip.file(decodeURIComponent(cp));
-      if(cf){
-        let css=await cf.async('string');
-        // Strip @font-face (avoids 404 font loads)
-        css=css.replace(/@font-face\s*\{[^}]*\}/g,'');
-        // Strip rules that set dark/black backgrounds on body/html/root
-        css=css.replace(/(body|html|\*)\s*\{[^}]*(background(-color)?:\s*(#[0-9a-f]{3,6}|rgb[^)]+\)|black|dark)[^}]*)\}/gi,'');
-        // Strip color:white / color:#fff type rules that would make text invisible
-        css=css.replace(/color\s*:\s*(white|#fff|#ffffff|rgba?\([^)]*255[^)]*\))/gi,'color:#111');
-        iStyle+=css+'\n';
-      }
-    }
-
+      if(!cf)return '';
+      return sanitizeCSS(await cf.async('string'))+'\n';
+    }));
+    let iStyle=cssParts.join('');
     // ── Parse and extract body content
     const parsed=S.parser.parseFromString(html,'text/html');
     // Remove <link> and <style> tags from parsed (we handle CSS ourselves)
     parsed.querySelectorAll('link[rel="stylesheet"]').forEach(el=>el.remove());
     // Keep internal <style> tags but sanitize them too
-    parsed.querySelectorAll('style').forEach(el=>{
-      let css=el.textContent;
-      css=css.replace(/@font-face\s*\{[^}]*\}/g,'');
-      css=css.replace(/(body|html|\*)\s*\{[^}]*(background(-color)?:\s*(#[0-9a-f]{3,6}|rgb[^)]+\)|black|dark)[^}]*)\}/gi,'');
-      css=css.replace(/color\s*:\s*(white|#fff|#ffffff|rgba?\([^)]*255[^)]*\))/gi,'color:#111');
-      el.textContent=css;
-    });
+    parsed.querySelectorAll('style').forEach(el=>{el.textContent=sanitizeCSS(el.textContent);});
 
     const body=parsed.body?parsed.body.innerHTML:html;
     epubEl.innerHTML=(iStyle?`<style>${iStyle}</style>`:'')+body;
