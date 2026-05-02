@@ -246,15 +246,24 @@ async def file_head(request: Request):
     from utils.directoryHandler import DRIVE_DATA
     import mimetypes
     from urllib.parse import quote
-    
+    from pathlib import Path as FPath
+
+    if DRIVE_DATA is None:
+        raise HTTPException(status_code=503, detail="Drive not initialized")
+
     path = request.query_params.get("path")
     if not path:
         raise HTTPException(status_code=400, detail="Path parameter required")
-    
+
     try:
         file = DRIVE_DATA.get_file(path)
-        mime_type = mimetypes.guess_type(file.name.lower())[0] or "application/octet-stream"
-        
+        ext = FPath(file.name).suffix.lower()
+        mime_type = (
+            'application/pdf' if ext == '.pdf' else
+            'application/epub+zip' if ext == '.epub' else
+            mimetypes.guess_type(file.name.lower())[0] or "application/octet-stream"
+        )
+
         return Response(
             status_code=200,
             headers={
