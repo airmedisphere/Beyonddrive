@@ -319,12 +319,18 @@
                 <div class="control-group">
                     <div class="control-label">Speed</div>
                     <div class="speed-grid">
+                        <button class="control-btn" data-speed="0.25">0.25x</button>
                         <button class="control-btn" data-speed="0.5">0.5x</button>
                         <button class="control-btn" data-speed="0.75">0.75x</button>
                         <button class="control-btn active" data-speed="1">1x</button>
                         <button class="control-btn" data-speed="1.25">1.25x</button>
                         <button class="control-btn" data-speed="1.5">1.5x</button>
+                        <button class="control-btn" data-speed="1.75">1.75x</button>
                         <button class="control-btn" data-speed="2">2x</button>
+                        <button class="control-btn" data-speed="2.5">2.5x</button>
+                        <button class="control-btn" data-speed="3">3x</button>
+                        <button class="control-btn" data-speed="3.5">3.5x</button>
+                        <button class="control-btn" data-speed="4">4x</button>
                     </div>
                 </div>
 
@@ -456,7 +462,7 @@
         document.addEventListener('keydown', (e) => {
             if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
 
-            const speedPresets = { '1':0.25, '2':0.5, '3':0.75, '4':1.0, '5':1.25, '6':1.5, '7':1.75, '8':2.0, '9':2.5 };
+            const speedPresets = { '1':0.25, '2':0.5, '3':0.75, '4':1.0, '5':1.25, '6':1.5, '7':2.0, '8':2.5, '9':3.0 };
 
             if (speedPresets[e.key]) {
                 e.preventDefault();
