@@ -211,16 +211,18 @@
             </div>
 
             <div class="sidebar-footer">
-                <div class="upgrade-card">
-                    <div class="upgrade-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polygon points="13,2 3,14 12,14 11,22 21,10 12,10 13,2"/>
+                <div class="storage-stats-card" id="storage-stats-card">
+                    <div class="storage-stats-header">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
                         </svg>
+                        <span>Storage</span>
+                        <span class="storage-refresh" id="storage-refresh" title="Refresh">↻</span>
                     </div>
-                    <div class="upgrade-content">
-                        <h4>Upgrade to Pro</h4>
-                        <p>Unlock unlimited storage and advanced features</p>
-                    </div>
+                    <div class="storage-total" id="storage-total">Loading…</div>
+                    <div class="storage-bars" id="storage-bars"></div>
+                    <div class="storage-legend" id="storage-legend"></div>
                 </div>
             </div>
         </div>
@@ -601,6 +603,79 @@
     <script src="static/js/premiumFeatures.js"></script>
     <script src="static/js/main.js"></script>
     <script src="static/js/mobile.js"></script>
+    <script>
+    // ── Storage Stats Widget ──────────────────────────────────────────────
+    (function () {
+        const COLORS = {
+            "video":    "#14b8a6",
+            "audio":    "#f59e0b",
+            "document": "#6366f1",
+            "image":    "#ec4899",
+            "other":    "#64748b",
+        };
+        const LABELS = {
+            "video": "🎬 Video", "audio": "🎵 Audio",
+            "document": "📄 Docs", "image": "🖼️ Images", "other": "📦 Other"
+        };
+
+        function fmt(b) {
+            if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+            if (b >= 1048576)    return (b / 1048576).toFixed(2) + ' MB';
+            if (b >= 1024)       return (b / 1024).toFixed(2) + ' KB';
+            return b + ' B';
+        }
+
+        async function loadStats() {
+            const totalEl  = document.getElementById('storage-total');
+            const barsEl   = document.getElementById('storage-bars');
+            const legendEl = document.getElementById('storage-legend');
+            if (!totalEl) return;
+
+            totalEl.textContent = 'Loading…';
+            barsEl.innerHTML = '';
+            legendEl.innerHTML = '';
+
+            try {
+                const res  = await fetch('/api/driveStats');
+                const data = await res.json();
+                if (data.status !== 'ok') { totalEl.textContent = 'Error'; return; }
+
+                totalEl.textContent = fmt(data.total_size) + '  ·  ' + data.total_files + ' files';
+
+                const bd = data.breakdown || {};
+                const totalSz = data.total_size || 1;
+
+                // Bars
+                Object.entries(bd).sort((a,b) => b[1].size - a[1].size).forEach(([cat, info]) => {
+                    const pct = Math.max(1, (info.size / totalSz) * 100);
+                    const seg = document.createElement('div');
+                    seg.className = 'storage-bar-seg';
+                    seg.style.width = pct + '%';
+                    seg.style.background = COLORS[cat] || '#64748b';
+                    seg.title = (LABELS[cat] || cat) + ': ' + fmt(info.size);
+                    barsEl.appendChild(seg);
+                });
+
+                // Legend
+                Object.entries(bd).sort((a,b) => b[1].size - a[1].size).forEach(([cat, info]) => {
+                    const row = document.createElement('div');
+                    row.className = 'storage-legend-item';
+                    row.innerHTML = `
+                        <span class="storage-legend-dot" style="background:${COLORS[cat]||'#64748b'}"></span>
+                        <span class="storage-legend-name">${LABELS[cat]||cat}</span>
+                        <span class="storage-legend-val">${fmt(info.size)}</span>`;
+                    legendEl.appendChild(row);
+                });
+            } catch (e) {
+                if (totalEl) totalEl.textContent = 'Unavailable';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadStats);
+        const refreshBtn = document.getElementById('storage-refresh');
+        if (refreshBtn) refreshBtn.addEventListener('click', loadStats);
+    })();
+    </script>
 </body>
 
 </html>
