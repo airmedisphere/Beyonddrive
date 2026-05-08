@@ -585,3 +585,331 @@ button:focus,input:focus,select:focus{outline:none;}
 /* ── Shortcut hint button ──────────────────────────────────── */
 .tb-shortcut-hint{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#94a3b8;border-radius:8px;width:32px;height:32px;font-size:.9rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s;margin-left:6px;}
 .tb-shortcut-hint:hover{background:rgba(20,184,166,.18);border-color:rgba(20,184,166,.4);color:#2dd4bf;}
+
+/* ============================================================
+   NEW FEATURES CSS — EduMaster Pro Enhancements
+   ============================================================ */
+
+/* ── DARK THEME ── */
+[data-theme="dark"] {
+    --bg-primary: #0f172a;
+    --bg-secondary: #1e293b;
+    --bg-card: #1e293b;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --border-color: #334155;
+    --hover-bg: #334155;
+}
+
+[data-theme="dark"] body {
+    background: #0f172a;
+    color: #f1f5f9;
+}
+
+[data-theme="dark"] .sidebar {
+    background: #1e293b;
+    border-right-color: #334155;
+}
+
+[data-theme="dark"] .main-content {
+    background: #0f172a;
+}
+
+[data-theme="dark"] .header {
+    background: #1e293b;
+    border-bottom-color: #334155;
+}
+
+[data-theme="dark"] .directory-table {
+    background: #1e293b;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .directory-item {
+    border-bottom-color: #334155;
+}
+
+[data-theme="dark"] .directory-item:hover {
+    background: #334155;
+}
+
+[data-theme="dark"] .table-header {
+    background: #0f172a;
+    border-bottom-color: #334155;
+}
+
+[data-theme="dark"] .search-bar {
+    background: #334155;
+    border-color: #475569;
+}
+
+[data-theme="dark"] .search-bar input {
+    background: transparent;
+    color: #f1f5f9;
+}
+
+[data-theme="dark"] .sort-select {
+    background: #334155;
+    color: #f1f5f9;
+    border-color: #475569;
+}
+
+[data-theme="dark"] .sort-order-btn {
+    background: #334155;
+    border-color: #475569;
+    color: #f1f5f9;
+}
+
+[data-theme="dark"] .modal-content {
+    background: #1e293b;
+    color: #f1f5f9;
+}
+
+[data-theme="dark"] .modal-content input,
+[data-theme="dark"] .modal-content textarea {
+    background: #334155 !important;
+    border-color: #475569 !important;
+    color: #f1f5f9 !important;
+}
+
+[data-theme="dark"] .menu-item {
+    color: #94a3b8;
+}
+
+[data-theme="dark"] .menu-item:hover,
+[data-theme="dark"] .menu-item.selected-item {
+    background: #334155;
+    color: #38bdf8;
+}
+
+[data-theme="dark"] .content-title {
+    color: #f1f5f9;
+}
+
+[data-theme="dark"] .more-options {
+    background: #1e293b;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .more-options-item:hover {
+    background: #334155;
+}
+
+[data-theme="dark"] .storage-stats-card {
+    background: #0f172a;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .breadcrumb-container {
+    background: #1e293b;
+}
+
+[data-theme="dark"] .filter-pills {
+    background: #1e293b;
+}
+
+[data-theme="dark"] .filter-pill {
+    background: #334155;
+    border-color: #475569;
+    color: #94a3b8;
+}
+
+[data-theme="dark"] .filter-pill.active {
+    background: #0ea5e9;
+    border-color: #0ea5e9;
+    color: #fff;
+}
+
+/* ── FILTER PILLS ── */
+.filter-pills {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px;
+    flex-wrap: wrap;
+    align-items: center;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+}
+
+.filter-pill {
+    padding: 5px 14px;
+    border-radius: 20px;
+    border: 1.5px solid #e2e8f0;
+    background: #fff;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    color: #64748b;
+    transition: all 0.15s ease;
+    font-family: inherit;
+}
+
+.filter-pill:hover {
+    border-color: #0ea5e9;
+    color: #0ea5e9;
+}
+
+.filter-pill.active {
+    background: #0ea5e9;
+    border-color: #0ea5e9;
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(14,165,233,0.3);
+}
+
+/* ── WATCH PROGRESS BADGE ── */
+.watch-progress-badge {
+    display: inline-block;
+    margin-left: 8px;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #fff;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 10px;
+    vertical-align: middle;
+    letter-spacing: 0.02em;
+}
+
+/* ── FAVORITES ── */
+.fav-btn {
+    line-height: 1;
+}
+
+.fav-btn.fav-active {
+    filter: drop-shadow(0 0 4px rgba(251,191,36,0.8));
+}
+
+.fav-remove {
+    margin-left: auto;
+    opacity: 0.4;
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 2px 4px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.fav-remove:hover {
+    opacity: 1;
+    background: rgba(239,68,68,0.1);
+    color: #ef4444;
+}
+
+.fav-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* ── NOTE BUTTON ── */
+.note-btn.note-active {
+    filter: drop-shadow(0 0 3px rgba(245,158,11,0.7));
+}
+
+/* ── DOWNLOAD TRACKER BAR ── */
+#dl-tracker-bar {
+    position: fixed;
+    bottom: -200px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1e293b;
+    color: #f1f5f9;
+    border-radius: 16px 16px 0 0;
+    padding: 12px 20px;
+    min-width: 320px;
+    max-width: 480px;
+    z-index: 9999;
+    transition: bottom 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
+}
+
+#dl-tracker-bar.dl-tracker-visible {
+    bottom: 0;
+}
+
+.dl-tracker-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.dl-tracker-icon {
+    font-size: 1rem;
+}
+
+#dl-tracker-text {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #94a3b8;
+}
+
+#dl-tracker-close {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    background: none;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 1rem;
+}
+
+.dl-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+}
+
+.dl-name {
+    flex: 1;
+    color: #e2e8f0;
+    font-weight: 500;
+}
+
+.dl-status {
+    color: #38bdf8;
+    font-weight: 600;
+    min-width: 50px;
+    text-align: right;
+}
+
+.dl-mini-bar {
+    width: 60px;
+    height: 4px;
+    background: #334155;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.dl-mini-filled {
+    height: 100%;
+    background: linear-gradient(90deg, #38bdf8, #0ea5e9);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+/* ── COPY LINK ITEM ── */
+.copy-link-item {
+    color: #0ea5e9 !important;
+}
+
+/* ── THEME TOGGLE BUTTON ── */
+.theme-toggle-btn {
+    font-size: 1.1rem !important;
+}
+
+/* ── DARK MODE for recent-empty ── */
+[data-theme="dark"] .recent-empty {
+    color: #475569;
+}
+
+[data-theme="dark"] .recent-item:hover {
+    background: #334155;
+}
+
+[data-theme="dark"] .item-title,
+[data-theme="dark"] .item-size,
+[data-theme="dark"] .header-cell {
+    color: #e2e8f0;
+}
