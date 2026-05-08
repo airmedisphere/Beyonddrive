@@ -19,6 +19,7 @@ You can use this bot to upload files to your TG Drive website directly instead o
 /create_folder - Create a new folder in current directory
 /bulk_import - Import files in bulk from Telegram channel/group
 /fast_import - Import files directly without copying (requires admin access)
+/stats - Show drive storage statistics
 
 📤 **How To Upload Files:** Send a file to this bot and it will be uploaded to your TG Drive website. You can also set a folder for file uploads using /set_folder command.
 
@@ -93,10 +94,71 @@ async def start_handler(client: Client, message: Message):
 
 
 @main_bot.on_message(
-    filters.command("fast_import")
+    filters.command("stats")
     & filters.private
     & filters.user(config.TELEGRAM_ADMIN_IDS),
 )
+async def stats_handler(client: Client, message: Message):
+    """Show drive storage statistics."""
+    from utils.directoryHandler import DRIVE_DATA
+    from pathlib import Path as _Path
+
+    if DRIVE_DATA is None:
+        await message.reply_text("❌ Drive not initialized.")
+        return
+
+    total_files = 0
+    total_folders = 0
+    total_size = 0
+    breakdown = {}
+
+    VIDEO_EXTS = {".mp4",".mkv",".avi",".mov",".webm",".m4v",".ts",".flv",".wmv",".3gp",".mpg",".mpeg",".ogv"}
+    AUDIO_EXTS = {".mp3",".wav",".flac",".aac",".ogg",".m4a",".opus",".wma"}
+    DOC_EXTS   = {".pdf",".doc",".docx",".xls",".xlsx",".ppt",".pptx",".txt",".epub",".csv"}
+    IMAGE_EXTS = {".jpg",".jpeg",".png",".gif",".webp",".bmp",".svg"}
+
+    def classify(name):
+        ext = _Path(name).suffix.lower()
+        if ext in VIDEO_EXTS:  return "🎬 Video"
+        if ext in AUDIO_EXTS:  return "🎵 Audio"
+        if ext in DOC_EXTS:    return "📄 Document"
+        if ext in IMAGE_EXTS:  return "🖼️ Image"
+        return "📦 Other"
+
+    def traverse(folder):
+        nonlocal total_files, total_folders, total_size
+        for item in folder.contents.values():
+            if item.type == "folder":
+                total_folders += 1
+                traverse(item)
+            else:
+                total_files += 1
+                total_size  += item.size
+                cat = classify(item.name)
+                breakdown[cat] = breakdown.get(cat, 0) + item.size
+
+    traverse(DRIVE_DATA.get_directory("/"))
+
+    def fmt(b):
+        if b >= 1073741824: return f"{b/1073741824:.2f} GB"
+        if b >= 1048576:    return f"{b/1048576:.2f} MB"
+        if b >= 1024:       return f"{b/1024:.2f} KB"
+        return f"{b} B"
+
+    lines = [
+        "📊 **Drive Statistics**\n",
+        f"📁 Folders : `{total_folders}`",
+        f"📄 Files   : `{total_files}`",
+        f"💾 Total   : `{fmt(total_size)}`\n",
+        "**Breakdown by type:**",
+    ]
+    for cat, size in sorted(breakdown.items(), key=lambda x: x[1], reverse=True):
+        lines.append(f"  {cat}: `{fmt(size)}`")
+
+    await message.reply_text("\n".join(lines))
+
+
+
 async def fast_import_handler(client: Client, message: Message):
     """
     Handles the /fast_import command for importing files directly without copying.

@@ -150,6 +150,19 @@ async def start_file_uploader(
 
     logger.info(f"Uploaded file {file_path} {id}")
 
+    # Fire upload_complete webhooks (import lazily to avoid circular deps)
+    try:
+        from main import fire_webhooks
+        import asyncio as _asyncio
+        _asyncio.create_task(fire_webhooks("upload_complete", {
+            "filename": filename,
+            "size": size,
+            "path": directory_path,
+            "duration": duration,
+        }))
+    except Exception:
+        pass
+
     if delete:
         try:
             os.remove(file_path)
