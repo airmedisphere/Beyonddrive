@@ -211,7 +211,11 @@
             </div>
 
             <div class="sidebar-footer">
-                <div class="storage-stats-card" id="storage-stats-card">
+                <div class="recent-panel-wrap">
+                    <div class="recent-panel-title">🕓 Recent Files</div>
+                    <div id="recent-panel"></div>
+                </div>
+                <div class="storage-stats-card" id="storage-stats-card" style="margin-top:12px">
                     <div class="storage-stats-header">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
                             <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
@@ -605,6 +609,7 @@
     <script src="static/js/premiumFeatures.js"></script>
     <script src="static/js/main.js"></script>
     <script src="static/js/mobile.js"></script>
+    <script src="static/js/powerfeatures.js"></script>
     <script>
     // ── Storage Stats Widget ──────────────────────────────────────────────
     (function () {
