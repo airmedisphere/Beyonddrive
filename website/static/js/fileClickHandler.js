@@ -1,28 +1,46 @@
 function openFolder() {
+    const folderEl = this
     let path = (getCurrentPath() + '/' + this.getAttribute('data-id') + '/').replaceAll('//', '/')
 
     const auth = getFolderAuthFromPath()
     if (auth) {
         path = path + '&auth=' + auth
     }
-    window.location.href = `/?path=${path}`
+
+    // Check if folder is locked before navigating
+    const rawPath = (getCurrentPath() + '/' + folderEl.getAttribute('data-id')).replaceAll('//', '/')
+    checkAndPromptFolderLock(rawPath).then(allowed => {
+        if (allowed) window.location.href = `/?path=${path}`
+    })
 }
 
 function openFile() {
     const fileName = this.getAttribute('data-name').toLowerCase()
     let path = '/file?path=' + this.getAttribute('data-path') + '/' + this.getAttribute('data-id')
+    const rawPath = this.getAttribute('data-path') + '/' + this.getAttribute('data-id')
 
-    // Check if it's a PDF or EPUB file — open in the built-in viewer
+    // PDF / EPUB — built-in viewer
     if (fileName.endsWith('.pdf') || fileName.endsWith('.epub')) {
-        const rawPath = this.getAttribute('data-path') + '/' + this.getAttribute('data-id')
-        const viewerPath = '/pdf-viewer?path=' + encodeURIComponent(rawPath)
-        window.open(viewerPath, '_blank')
+        window.open('/pdf-viewer?path=' + encodeURIComponent(rawPath), '_blank')
         return
     }
 
-    // Check if it's a video file
-    if (fileName.endsWith('.mp4') || fileName.endsWith('.mkv') || fileName.endsWith('.webm') || fileName.endsWith('.mov') || fileName.endsWith('.avi') || fileName.endsWith('.ts') || fileName.endsWith('.ogv')) {
-        // Show player selection modal
+    // Image files — image viewer
+    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif', '.tiff', '.tif']
+    if (imageExts.some(ext => fileName.endsWith(ext))) {
+        window.open('/image-viewer?path=' + encodeURIComponent(rawPath), '_blank')
+        return
+    }
+
+    // Audio files — audio player
+    const audioExts = ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus', '.wma', '.aiff', '.alac']
+    if (audioExts.some(ext => fileName.endsWith(ext))) {
+        window.open('/audio-player?path=' + encodeURIComponent(rawPath), '_blank')
+        return
+    }
+
+    // Video files — player selection
+    if (fileName.endsWith('.mp4') || fileName.endsWith('.mkv') || fileName.endsWith('.webm') || fileName.endsWith('.mov') || fileName.endsWith('.avi') || fileName.endsWith('.ts') || fileName.endsWith('.ogv') || fileName.endsWith('.m4v') || fileName.endsWith('.flv') || fileName.endsWith('.3gp') || fileName.endsWith('.mpg') || fileName.endsWith('.mpeg')) {
         showPlayerSelectionModal(path)
         return
     }
@@ -252,6 +270,10 @@ function openMoreButton(div) {
             moreDiv.querySelector(`#folder-share-${id}`).addEventListener('click', shareFolder)
         }
         catch { }
+        try {
+            moreDiv.querySelector(`#lock-folder-${id}`).addEventListener('click', lockFolder)
+        }
+        catch { }
     }
     else {
         moreDiv.querySelector(`#restore-${id}`).addEventListener('click', restoreFileFolder)
@@ -410,11 +432,18 @@ async function shareFile() {
     const path = document.getElementById(`more-option-${id}`).getAttribute('data-path') + '/' + id
     const root_url = getRootUrl()
 
+    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif', '.tiff', '.tif']
+    const audioExts = ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus', '.wma', '.aiff', '.alac']
+    const videoExts = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.ts', '.ogv', '.m4v', '.flv', '.3gp', '.mpg', '.mpeg']
+
     let link
     if (fileName.endsWith('.pdf') || fileName.endsWith('.epub')) {
-        // Share viewer link for PDF and EPUB
         link = `${root_url}/pdf-viewer?path=${encodeURIComponent(path)}`
-    } else if (fileName.endsWith('.mp4') || fileName.endsWith('.mkv') || fileName.endsWith('.webm') || fileName.endsWith('.mov') || fileName.endsWith('.avi') || fileName.endsWith('.ts') || fileName.endsWith('.ogv')) {
+    } else if (imageExts.some(ext => fileName.endsWith(ext))) {
+        link = `${root_url}/image-viewer?path=${encodeURIComponent(path)}`
+    } else if (audioExts.some(ext => fileName.endsWith(ext))) {
+        link = `${root_url}/audio-player?path=${encodeURIComponent(path)}`
+    } else if (videoExts.some(ext => fileName.endsWith(ext))) {
         link = `${root_url}/stream?url=${root_url}/file?path=${path}`
     } else {
         link = `${root_url}/file?path=${path}`
@@ -457,6 +486,175 @@ async function shareFolder() {
     console.log(link)
 
     copyTextToClipboard(link)
+}
+
+// ── Folder Lock ────────────────────────────────────────────────────────────
+
+function lockFolder() {
+    const id   = this.getAttribute('id').split('-')[2]
+    const path = document.getElementById(`more-option-${id}`).getAttribute('data-path') + '/' + id
+    showFolderLockModal(path)
+}
+
+function showFolderLockModal(folderPath) {
+    // Remove any existing modal
+    const existing = document.getElementById('folder-lock-modal')
+    if (existing) existing.remove()
+
+    const modal = document.createElement('div')
+    modal.id = 'folder-lock-modal'
+    modal.className = 'modal'
+    modal.style.cssText = 'z-index:1000;opacity:1;'
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🔒 Lock Folder</h3>
+                <p>Set or remove a password on this folder</p>
+            </div>
+            <div class="modal-body">
+                <div id="lock-status-msg" style="font-size:.82rem;color:#94a3b8;margin-bottom:12px;"></div>
+                <div class="input-group">
+                    <label for="lock-folder-pass">Folder Password</label>
+                    <input type="password" id="lock-folder-pass" placeholder="Enter folder password" autocomplete="new-password"/>
+                </div>
+                <div class="input-group" id="lock-confirm-group">
+                    <label for="lock-folder-pass2">Confirm Password</label>
+                    <input type="password" id="lock-folder-pass2" placeholder="Confirm password" autocomplete="new-password"/>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="lock-remove-btn" class="btn btn-danger" style="margin-right:auto">Remove Lock</button>
+                <button id="lock-cancel-btn" class="btn btn-secondary">Cancel</button>
+                <button id="lock-set-btn" class="btn btn-primary">Lock Folder</button>
+            </div>
+        </div>
+    `
+    document.body.appendChild(modal)
+
+    const blur = document.getElementById('bg-blur')
+    blur.style.zIndex = '999'
+    blur.style.opacity = '0.5'
+
+    function closeLockModal() {
+        modal.remove()
+        blur.style.opacity = '0'
+        setTimeout(() => { blur.style.zIndex = '-1' }, 300)
+    }
+
+    document.getElementById('lock-cancel-btn').addEventListener('click', closeLockModal)
+
+    // Check if already locked
+    fetch(`/api/v2/folder-password/check/${encodeURIComponent(folderPath.replace(/^\//, ''))}`)
+        .then(r => r.json())
+        .then(data => {
+            const statusEl = document.getElementById('lock-status-msg')
+            if (data.protected) {
+                statusEl.innerHTML = '🔒 <strong style="color:#f59e0b">This folder is currently locked.</strong> Set a new password to change it.'
+            } else {
+                statusEl.textContent = '🔓 This folder is not locked. Set a password to restrict access.'
+                document.getElementById('lock-remove-btn').style.display = 'none'
+            }
+        }).catch(() => {})
+
+    document.getElementById('lock-set-btn').addEventListener('click', async () => {
+        const pass  = document.getElementById('lock-folder-pass').value
+        const pass2 = document.getElementById('lock-folder-pass2').value
+        if (!pass) { alert('Please enter a password.'); return }
+        if (pass !== pass2) { alert('Passwords do not match.'); return }
+
+        const res = await fetch('/api/v2/folder-password/set', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ admin_password: getPassword(), folder_path: folderPath, password: pass })
+        })
+        const data = await res.json()
+        if (data.status === 'ok') {
+            alert('✅ Folder locked successfully!')
+            closeLockModal()
+        } else {
+            alert('❌ Failed to lock folder: ' + (data.message || data.status))
+        }
+    })
+
+    document.getElementById('lock-remove-btn').addEventListener('click', async () => {
+        if (!confirm('Remove the lock from this folder?')) return
+        const res = await fetch('/api/v2/folder-password/remove', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ admin_password: getPassword(), folder_path: folderPath })
+        })
+        const data = await res.json()
+        if (data.status === 'ok') {
+            alert('✅ Folder lock removed.')
+            closeLockModal()
+        } else {
+            alert('❌ Failed: ' + (data.message || data.status))
+        }
+    })
+}
+
+// ── Folder unlock prompt (shown when entering a locked folder) ─────────────
+
+async function checkAndPromptFolderLock(folderPath) {
+    try {
+        const res  = await fetch(`/api/v2/folder-password/check/${encodeURIComponent(folderPath.replace(/^\//, ''))}`)
+        const data = await res.json()
+        if (!data.protected) return true  // not locked, proceed
+
+        return new Promise(resolve => {
+            const modal = document.createElement('div')
+            modal.className = 'modal'
+            modal.style.cssText = 'z-index:1000;opacity:1;'
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>🔒 Locked Folder</h3>
+                        <p>This folder is password protected. Enter the folder password to access it.</p>
+                    </div>
+                    <div class="modal-body">
+                        <div class="input-group">
+                            <label for="unlock-pass">Folder Password</label>
+                            <input type="password" id="unlock-pass" placeholder="Enter folder password" autocomplete="off"/>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button id="unlock-cancel" class="btn btn-secondary">Cancel</button>
+                        <button id="unlock-submit" class="btn btn-primary">Unlock</button>
+                    </div>
+                </div>
+            `
+            document.body.appendChild(modal)
+            const blur = document.getElementById('bg-blur')
+            blur.style.zIndex = '999'; blur.style.opacity = '0.5'
+            setTimeout(() => document.getElementById('unlock-pass').focus(), 200)
+
+            function close(result) {
+                modal.remove()
+                blur.style.opacity = '0'
+                setTimeout(() => { blur.style.zIndex = '-1' }, 300)
+                resolve(result)
+            }
+
+            document.getElementById('unlock-cancel').addEventListener('click', () => close(false))
+            document.getElementById('unlock-submit').addEventListener('click', async () => {
+                const pass = document.getElementById('unlock-pass').value
+                if (!pass) { alert('Please enter the password.'); return }
+                const r = await fetch('/api/v2/folder-password/verify', {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ folder_path: folderPath, password: pass })
+                })
+                const d = await r.json()
+                if (d.status === 'ok') { close(true) }
+                else { alert('❌ Wrong password.') }
+            })
+            document.getElementById('unlock-pass').addEventListener('keydown', e => {
+                if (e.key === 'Enter') document.getElementById('unlock-submit').click()
+            })
+        })
+    } catch (e) {
+        return true // on error, allow access
+    }
 }
 
 // File More Button Handler  End
