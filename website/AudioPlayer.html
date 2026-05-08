@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Audio Player</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+        *,*::before,*::after{margin:0;padding:0;box-sizing:border-box;}
+        body{min-height:100vh;background:linear-gradient(135deg,#0b0f1e 0%,#111827 60%,#1a2338 100%);display:flex;align-items:center;justify-content:center;font-family:'DM Sans',system-ui,sans-serif;padding:20px;}
+
+        .card{width:100%;max-width:480px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:24px;padding:36px 32px 28px;box-shadow:0 24px 80px rgba(0,0,0,.6);}
+
+        /* Art */
+        .art{width:180px;height:180px;margin:0 auto 28px;border-radius:50%;background:linear-gradient(135deg,#0d9488,#14b8a6,#2dd4bf);display:flex;align-items:center;justify-content:center;box-shadow:0 0 60px rgba(20,184,166,.25);animation:pulse 3s ease-in-out infinite;}
+        @keyframes pulse{0%,100%{box-shadow:0 0 60px rgba(20,184,166,.25);}50%{box-shadow:0 0 80px rgba(20,184,166,.45);}}
+        .art.playing{animation:spin-art 12s linear infinite,pulse 3s ease-in-out infinite;}
+        @keyframes spin-art{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+        .art svg{width:72px;height:72px;stroke:rgba(255,255,255,.9);fill:none;stroke-width:1.5;}
+
+        /* Meta */
+        .meta{text-align:center;margin-bottom:24px;}
+        .meta h2{font-size:1.15rem;font-weight:700;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;margin:0 auto 6px;}
+        .meta .sub{font-size:.8rem;color:#64748b;}
+
+        /* Progress */
+        .progress-wrap{margin-bottom:10px;}
+        .progress-bar-bg{width:100%;height:4px;background:rgba(255,255,255,.1);border-radius:4px;cursor:pointer;position:relative;}
+        .progress-bar-fill{height:100%;background:linear-gradient(90deg,#14b8a6,#2dd4bf);border-radius:4px;transition:width .1s linear;pointer-events:none;}
+        .progress-thumb{position:absolute;top:50%;transform:translate(-50%,-50%);width:12px;height:12px;background:#2dd4bf;border-radius:50%;box-shadow:0 0 8px rgba(20,184,166,.6);opacity:0;transition:opacity .15s;pointer-events:none;}
+        .progress-bar-bg:hover .progress-thumb{opacity:1;}
+        .time-row{display:flex;justify-content:space-between;font-size:.72rem;color:#64748b;margin-top:6px;}
+
+        /* Controls */
+        .controls{display:flex;align-items:center;justify-content:center;gap:16px;margin:20px 0;}
+        .ctrl-btn{background:none;border:none;cursor:pointer;color:#94a3b8;transition:color .15s,transform .1s;display:flex;align-items:center;justify-content:center;}
+        .ctrl-btn:hover{color:#2dd4bf;transform:scale(1.1);}
+        .ctrl-btn svg{stroke:currentColor;fill:none;stroke-width:2;}
+        .ctrl-btn.sm svg{width:22px;height:22px;}
+        .ctrl-btn.md svg{width:26px;height:26px;}
+        .play-btn{width:60px;height:60px;border-radius:50%;background:linear-gradient(135deg,#14b8a6,#0d9488);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px rgba(20,184,166,.4);transition:transform .1s,box-shadow .15s;}
+        .play-btn:hover{transform:scale(1.07);box-shadow:0 8px 32px rgba(20,184,166,.55);}
+        .play-btn:active{transform:scale(.96);}
+        .play-btn svg{width:26px;height:26px;stroke:white;fill:none;stroke-width:2;}
+
+        /* Volume */
+        .volume-row{display:flex;align-items:center;gap:10px;margin-top:4px;}
+        .vol-icon{color:#64748b;}
+        .vol-icon svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;}
+        .vol-slider{flex:1;height:3px;background:rgba(255,255,255,.1);border-radius:3px;appearance:none;-webkit-appearance:none;cursor:pointer;outline:none;}
+        .vol-slider::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#14b8a6;cursor:pointer;}
+
+        /* Speed */
+        .bottom-row{display:flex;align-items:center;justify-content:space-between;margin-top:16px;}
+        .speed-btn{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);color:#94a3b8;border-radius:8px;padding:5px 10px;font-size:.75rem;font-weight:600;cursor:pointer;transition:background .15s,color .15s;}
+        .speed-btn:hover,.speed-btn.active{background:rgba(20,184,166,.18);border-color:rgba(20,184,166,.35);color:#2dd4bf;}
+        .loop-btn{background:none;border:none;cursor:pointer;color:#64748b;font-size:.75rem;font-weight:600;display:flex;align-items:center;gap:4px;transition:color .15s;}
+        .loop-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;}
+        .loop-btn.active{color:#2dd4bf;}
+
+        /* Error */
+        .error{display:none;text-align:center;padding:16px;color:#f43f5e;font-size:.85rem;}
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="art" id="art">
+        <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    </div>
+
+    <div class="meta">
+        <h2 id="title">Loading…</h2>
+        <div class="sub" id="sub-info">Audio</div>
+    </div>
+
+    <div class="progress-wrap">
+        <div class="progress-bar-bg" id="prog-bg">
+            <div class="progress-bar-fill" id="prog-fill" style="width:0%"></div>
+            <div class="progress-thumb" id="prog-thumb" style="left:0%"></div>
+        </div>
+        <div class="time-row"><span id="t-current">0:00</span><span id="t-total">0:00</span></div>
+    </div>
+
+    <div class="controls">
+        <button class="ctrl-btn sm" id="btn-skip-back" title="Skip back 10s">
+            <svg viewBox="0 0 24 24"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 .49-3.14"/><text x="7" y="14" font-family="sans-serif" font-size="6" fill="currentColor" stroke="none">10</text></svg>
+        </button>
+        <button class="ctrl-btn md" id="btn-prev" title="Restart">
+            <svg viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+        </button>
+        <button class="play-btn" id="btn-play">
+            <svg id="play-icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3" fill="white" stroke="none"/></svg>
+        </button>
+        <button class="ctrl-btn md" id="btn-next" style="visibility:hidden">
+            <svg viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+        </button>
+        <button class="ctrl-btn sm" id="btn-skip-fwd" title="Skip forward 10s">
+            <svg viewBox="0 0 24 24"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-.49-3.14"/><text x="7" y="14" font-family="sans-serif" font-size="6" fill="currentColor" stroke="none">10</text></svg>
+        </button>
+    </div>
+
+    <div class="volume-row">
+        <span class="vol-icon"><svg viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg></span>
+        <input type="range" class="vol-slider" id="vol-slider" min="0" max="1" step="0.01" value="1"/>
+    </div>
+
+    <div class="bottom-row">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="speed-btn active" data-speed="1">1×</button>
+            <button class="speed-btn" data-speed="1.25">1.25×</button>
+            <button class="speed-btn" data-speed="1.5">1.5×</button>
+            <button class="speed-btn" data-speed="1.75">1.75×</button>
+            <button class="speed-btn" data-speed="2">2×</button>
+        </div>
+        <button class="loop-btn" id="btn-loop">
+            <svg viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            Loop
+        </button>
+    </div>
+
+    <div class="error" id="error-msg">⚠️ Could not load audio file.</div>
+</div>
+
+<audio id="audio" preload="auto"></audio>
+
+<script>
+(function () {
+    const params   = new URLSearchParams(location.search);
+    const filePath = params.get('path') || '';
+    const fileUrl  = '/file?path=' + filePath;
+    const fileName = filePath.split('/').pop();
+
+    document.title = fileName + ' — Audio Player';
+    document.getElementById('title').textContent = fileName;
+
+    const audio   = document.getElementById('audio');
+    const art     = document.getElementById('art');
+    const playBtn = document.getElementById('btn-play');
+    const playIcon = document.getElementById('play-icon');
+    const progBg   = document.getElementById('prog-bg');
+    const progFill = document.getElementById('prog-fill');
+    const progThumb = document.getElementById('prog-thumb');
+    const tCurrent = document.getElementById('t-current');
+    const tTotal   = document.getElementById('t-total');
+    const volSlider = document.getElementById('vol-slider');
+
+    audio.src = fileUrl;
+
+    function fmt(s) {
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = Math.floor(s % 60).toString().padStart(2, '0');
+        return h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+    }
+
+    function updateProgress() {
+        if (!audio.duration) return;
+        const pct = (audio.currentTime / audio.duration) * 100;
+        progFill.style.width = pct + '%';
+        progThumb.style.left = pct + '%';
+        tCurrent.textContent = fmt(audio.currentTime);
+    }
+
+    audio.addEventListener('loadedmetadata', () => {
+        tTotal.textContent = fmt(audio.duration);
+        document.getElementById('sub-info').textContent = fmt(audio.duration) + ' · ' + fileName.split('.').pop().toUpperCase();
+    });
+
+    audio.addEventListener('timeupdate', updateProgress);
+    audio.addEventListener('error', () => { document.getElementById('error-msg').style.display = 'block'; });
+
+    // Play / pause
+    function togglePlay() {
+        if (audio.paused) { audio.play(); } else { audio.pause(); }
+    }
+    audio.addEventListener('play',  () => {
+        playIcon.innerHTML = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+        art.classList.add('playing');
+    });
+    audio.addEventListener('pause', () => {
+        playIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3" fill="white" stroke="none"/>';
+        art.classList.remove('playing');
+    });
+    playBtn.addEventListener('click', togglePlay);
+
+    // Progress click/drag
+    let seeking = false;
+    function seekTo(e) {
+        const rect = progBg.getBoundingClientRect();
+        const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        audio.currentTime = pct * audio.duration;
+        updateProgress();
+    }
+    progBg.addEventListener('mousedown', e => { seeking = true; seekTo(e); });
+    window.addEventListener('mousemove', e => { if (seeking) seekTo(e); });
+    window.addEventListener('mouseup',   () => { seeking = false; });
+
+    // Volume
+    volSlider.addEventListener('input', () => { audio.volume = parseFloat(volSlider.value); });
+
+    // Skip
+    document.getElementById('btn-skip-back').addEventListener('click', () => { audio.currentTime = Math.max(0, audio.currentTime - 10); });
+    document.getElementById('btn-skip-fwd').addEventListener('click',  () => { audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 10); });
+    document.getElementById('btn-prev').addEventListener('click', () => { audio.currentTime = 0; });
+
+    // Speed
+    document.querySelectorAll('.speed-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            audio.playbackRate = parseFloat(btn.dataset.speed);
+        });
+    });
+
+    // Loop
+    const loopBtn = document.getElementById('btn-loop');
+    loopBtn.addEventListener('click', () => {
+        audio.loop = !audio.loop;
+        loopBtn.classList.toggle('active', audio.loop);
+    });
+
+    // Keyboard
+    document.addEventListener('keydown', e => {
+        if (e.target.tagName === 'INPUT') return;
+        switch (e.key) {
+            case ' ': e.preventDefault(); togglePlay(); break;
+            case 'ArrowLeft':  audio.currentTime = Math.max(0, audio.currentTime - 5); break;
+            case 'ArrowRight': audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 5); break;
+            case 'ArrowUp':    audio.volume = Math.min(1, audio.volume + 0.1); volSlider.value = audio.volume; break;
+            case 'ArrowDown':  audio.volume = Math.max(0, audio.volume - 0.1); volSlider.value = audio.volume; break;
+            case 'm': case 'M': audio.muted = !audio.muted; break;
+        }
+    });
+})();
+</script>
+</body>
+</html>

@@ -370,6 +370,16 @@
 
     <script>
         const downloadUrl = new URL(window.location.href).searchParams.get('url');
+        
+        // Detect mime type from filename in URL
+        function getMimeType(url) {
+            const ext = url.split('?')[0].split('.').pop().toLowerCase();
+            const mimes = { 'mp4':'video/mp4','webm':'video/webm','mkv':'video/x-matroska',
+                'mov':'video/quicktime','avi':'video/x-msvideo','m4v':'video/mp4',
+                'flv':'video/x-flv','wmv':'video/x-ms-wmv','ts':'video/mp2t',
+                '3gp':'video/3gpp','ogv':'video/ogg','mpg':'video/mpeg','mpeg':'video/mpeg' };
+            return mimes[ext] || 'video/mp4';
+        }
         let player = null;
         let currentSpeed = 1.0;
         let currentQuality = 'original';
@@ -386,7 +396,7 @@
                 crossOrigin: "anonymous"
             });
 
-            player.src({ type: "video/mp4", src: downloadUrl });
+            player.src({ type: getMimeType(downloadUrl), src: downloadUrl });
 
             player.ready(() => {
                 const savedSpeed = localStorage.getItem('videoSpeed');
