@@ -180,6 +180,16 @@ async def pdf_viewer_page():
     return FileResponse("website/PDFViewer.html")
 
 
+@app.get("/image-viewer")
+async def image_viewer_page():
+    return FileResponse("website/ImageViewer.html")
+
+
+@app.get("/audio-player")
+async def audio_player_page():
+    return FileResponse("website/AudioPlayer.html")
+
+
 @app.get("/static/{file_path:path}")
 async def static_files(file_path):
     if "apiHandler.js" in file_path:
