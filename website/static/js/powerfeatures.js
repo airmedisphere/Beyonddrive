@@ -376,6 +376,5 @@ document.addEventListener('DOMContentLoaded', () => {
         header.appendChild(btn);
     }
 
-    // Show welcome toast
-    setTimeout(() => showToast('💡 Press ? for keyboard shortcuts · Drag files to upload', 5000), 1500);
+    // Welcome toast disabled
 });
