@@ -988,5 +988,277 @@ async def health_check():
     return JSONResponse({
         "status": "ok",
         "version": "2.0.0",
-        "features": ["streaming", "range-requests", "tokens", "tags", "search"]
+        "features": ["streaming", "range-requests", "tokens", "tags", "search",
+                     "drive-stats", "bulk-download", "duplicate-detection", "webhooks"]
     })
+
+
+# ============================================================================
+# DRIVE STATS
+# ============================================================================
+
+@app.get("/api/driveStats")
+async def get_drive_stats():
+    """Return total file count, total size, and breakdown by file type."""
+    from utils.directoryHandler import DRIVE_DATA
+
+    if DRIVE_DATA is None:
+        raise HTTPException(status_code=503, detail="Drive not initialized")
+
+    total_files = 0
+    total_folders = 0
+    total_size = 0
+    type_breakdown: Dict[str, Dict[str, int]] = {}
+
+    VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".3gp", ".mpg", ".mpeg", ".ogv"}
+    AUDIO_EXTS = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".opus", ".wma"}
+    DOC_EXTS   = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".epub", ".csv"}
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".ico"}
+
+    def classify(name: str) -> str:
+        ext = Path(name).suffix.lower()
+        if ext in VIDEO_EXTS:  return "video"
+        if ext in AUDIO_EXTS:  return "audio"
+        if ext in DOC_EXTS:    return "document"
+        if ext in IMAGE_EXTS:  return "image"
+        return "other"
+
+    def traverse(folder):
+        nonlocal total_files, total_folders, total_size
+        for item in folder.contents.values():
+            if item.type == "folder":
+                total_folders += 1
+                traverse(item)
+            else:
+                total_files += 1
+                total_size  += item.size
+                cat = classify(item.name)
+                if cat not in type_breakdown:
+                    type_breakdown[cat] = {"count": 0, "size": 0}
+                type_breakdown[cat]["count"] += 1
+                type_breakdown[cat]["size"]  += item.size
+
+    root = DRIVE_DATA.get_directory("/")
+    traverse(root)
+
+    return JSONResponse({
+        "status": "ok",
+        "total_files": total_files,
+        "total_folders": total_folders,
+        "total_size": total_size,
+        "breakdown": type_breakdown,
+    })
+
+
+# ============================================================================
+# BULK DOWNLOAD AS ZIP
+# ============================================================================
+
+@app.post("/api/bulkDownload")
+async def bulk_download(request: Request):
+    """
+    Stream multiple files packaged into a ZIP archive.
+    Body: { "paths": ["/path/to/file1", ...], "password": "..." }
+    Admin-only.
+    """
+    import zipfile, tempfile, shutil
+    from utils.directoryHandler import DRIVE_DATA
+    from fastapi.responses import StreamingResponse
+
+    data = await request.json()
+    if data.get("password") != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    paths: list = data.get("paths", [])
+    if not paths:
+        return JSONResponse({"status": "No paths provided"})
+
+    # Collect file metadata
+    files_to_zip = []
+    for p in paths:
+        try:
+            f = DRIVE_DATA.get_file(p)
+            files_to_zip.append(f)
+        except Exception:
+            pass  # skip missing files
+
+    if not files_to_zip:
+        return JSONResponse({"status": "No valid files found"})
+
+    # Build ZIP in a temp file then stream it
+    tmp_dir  = Path(tempfile.mkdtemp(dir="./cache"))
+    zip_path = tmp_dir / "bulk_download.zip"
+
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            for file_obj in files_to_zip:
+                # Download each file to temp dir first
+                tmp_file = tmp_dir / file_obj.name
+                try:
+                    # Stream from Telegram into temp file
+                    client = None
+                    from utils.clients import get_client as _get_client
+                    client = _get_client()
+                    await client.download_media(
+                        f.file_id if hasattr(f, "file_id") else file_obj.file_id,
+                        file_name=str(tmp_file),
+                    )
+                    if tmp_file.exists():
+                        zf.write(tmp_file, arcname=file_obj.name)
+                        tmp_file.unlink()
+                except Exception as e:
+                    logger.error(f"bulkDownload: skipping {file_obj.name}: {e}")
+
+        async def zip_streamer():
+            try:
+                async with aiofiles.open(zip_path, "rb") as f:
+                    while chunk := await f.read(1024 * 1024):
+                        yield chunk
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        return StreamingResponse(
+            zip_streamer(),
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=bulk_download.zip"},
+        )
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        logger.error(f"bulkDownload error: {e}")
+        return JSONResponse({"status": str(e)})
+
+
+# ============================================================================
+# DUPLICATE FILE DETECTION
+# ============================================================================
+
+@app.get("/api/duplicates")
+async def find_duplicates(password: str = Query(...)):
+    """Scan all files and return groups that share the same name AND size (likely duplicates)."""
+    from utils.directoryHandler import DRIVE_DATA
+
+    if password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=403, detail="Invalid password")
+
+    if DRIVE_DATA is None:
+        raise HTTPException(status_code=503, detail="Drive not initialized")
+
+    # Group files by (name_lower, size) — same name + same size = almost certainly duplicate
+    groups: Dict[str, list] = {}
+
+    def traverse(folder, current_path: str = "/"):
+        for item in folder.contents.values():
+            if item.type == "folder":
+                child_path = f"{current_path}{item.id}/"
+                traverse(item, child_path)
+            else:
+                key = f"{item.name.lower()}::{item.size}"
+                if key not in groups:
+                    groups[key] = []
+                groups[key].append({
+                    "name": item.name,
+                    "size": item.size,
+                    "path": getattr(item, "path", current_path + item.id),
+                    "id": item.id,
+                })
+
+    root = DRIVE_DATA.get_directory("/")
+    traverse(root)
+
+    duplicates = [
+        {"key": k, "count": len(v), "files": v}
+        for k, v in groups.items()
+        if len(v) > 1
+    ]
+    duplicates.sort(key=lambda x: x["count"], reverse=True)
+
+    total_wasted = sum(
+        g["files"][0]["size"] * (g["count"] - 1)
+        for g in duplicates
+    )
+
+    return JSONResponse({
+        "status": "ok",
+        "duplicate_groups": len(duplicates),
+        "total_duplicate_files": sum(g["count"] - 1 for g in duplicates),
+        "wasted_bytes": total_wasted,
+        "groups": duplicates,
+    })
+
+
+# ============================================================================
+# WEBHOOK NOTIFICATIONS
+# ============================================================================
+
+WEBHOOK_REGISTRY: Dict[str, Dict[str, Any]] = {}   # id -> {url, events, secret}
+
+@app.post("/api/webhooks/register")
+async def register_webhook(request: Request):
+    """
+    Register a webhook URL to receive event notifications.
+    Body: { "password": "...", "url": "https://...", "events": ["upload_complete", "file_deleted"] }
+    Supported events: upload_complete, file_deleted, file_renamed, folder_created
+    """
+    data = await request.json()
+    if data.get("password") != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    url    = data.get("url", "").strip()
+    events = data.get("events", ["upload_complete"])
+    secret = data.get("secret", "")   # optional HMAC secret
+
+    if not url or not url.startswith("http"):
+        return JSONResponse({"status": "Invalid URL"})
+
+    wh_id = secrets.token_hex(8)
+    WEBHOOK_REGISTRY[wh_id] = {"url": url, "events": events, "secret": secret, "created_at": datetime.now().isoformat(), "deliveries": 0, "failures": 0}
+    return JSONResponse({"status": "ok", "webhook_id": wh_id, "url": url, "events": events})
+
+
+@app.get("/api/webhooks/list")
+async def list_webhooks(password: str = Query(...)):
+    if password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=403, detail="Invalid password")
+    hooks = [{"id": k, **{x: v[x] for x in ("url","events","created_at","deliveries","failures")}} for k, v in WEBHOOK_REGISTRY.items()]
+    return JSONResponse({"status": "ok", "webhooks": hooks})
+
+
+@app.delete("/api/webhooks/{webhook_id}")
+async def delete_webhook(webhook_id: str, password: str = Query(...)):
+    if password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=403, detail="Invalid password")
+    if webhook_id not in WEBHOOK_REGISTRY:
+        return JSONResponse({"status": "Webhook not found"})
+    del WEBHOOK_REGISTRY[webhook_id]
+    return JSONResponse({"status": "ok"})
+
+
+async def fire_webhooks(event: str, payload: Dict[str, Any]):
+    """Internal helper — fire all webhooks subscribed to `event`."""
+    import aiohttp, hmac, hashlib, json as _json
+    for wh_id, wh in list(WEBHOOK_REGISTRY.items()):
+        if event not in wh.get("events", []):
+            continue
+        body = _json.dumps({"event": event, "timestamp": datetime.now().isoformat(), **payload})
+        headers = {"Content-Type": "application/json"}
+        if wh.get("secret"):
+            sig = hmac.new(wh["secret"].encode(), body.encode(), hashlib.sha256).hexdigest()
+            headers["X-Webhook-Signature"] = f"sha256={sig}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(wh["url"], data=body, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status < 400:
+                        WEBHOOK_REGISTRY[wh_id]["deliveries"] += 1
+                    else:
+                        WEBHOOK_REGISTRY[wh_id]["failures"] += 1
+        except Exception as e:
+            WEBHOOK_REGISTRY[wh_id]["failures"] += 1
+            logger.warning(f"Webhook delivery failed for {wh['url']}: {e}")
+
+
+# ============================================================================
+# MOUNT ADVANCED FEATURES ROUTER (was dead code — now active)
+# ============================================================================
+
+from utils.advanced_routes import router as advanced_router
+app.include_router(advanced_router)
