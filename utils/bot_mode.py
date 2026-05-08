@@ -20,6 +20,7 @@ You can use this bot to upload files to your TG Drive website directly instead o
 /bulk_import - Import files in bulk from Telegram channel/group
 /fast_import - Import files directly without copying (requires admin access)
 /stats - Show drive storage statistics
+/search <query> - Search files and folders on the drive
 
 📤 **How To Upload Files:** Send a file to this bot and it will be uploaded to your TG Drive website. You can also set a folder for file uploads using /set_folder command.
 
@@ -154,6 +155,50 @@ async def stats_handler(client: Client, message: Message):
     ]
     for cat, size in sorted(breakdown.items(), key=lambda x: x[1], reverse=True):
         lines.append(f"  {cat}: `{fmt(size)}`")
+
+    await message.reply_text("\n".join(lines))
+
+
+@main_bot.on_message(
+    filters.command("search")
+    & filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS),
+)
+async def search_handler(client: Client, message: Message):
+    """Search files and folders on the drive."""
+    from utils.directoryHandler import DRIVE_DATA
+
+    if DRIVE_DATA is None:
+        await message.reply_text("❌ Drive not initialized.")
+        return
+
+    query = " ".join(message.command[1:]).strip()
+    if not query:
+        await message.reply_text("❌ Usage: `/search <query>`")
+        return
+
+    results = DRIVE_DATA.search_file_folder(query)
+
+    if not results:
+        await message.reply_text(f"🔍 No results found for `{query}`")
+        return
+
+    lines = [f"🔍 **Search results for:** `{query}`\n"]
+    count = 0
+    for item_id, item in results.items():
+        if count >= 20:
+            lines.append(f"\n_...and {len(results) - 20} more results_")
+            break
+        icon = "📁" if item.type == "folder" else "📄"
+        size_str = ""
+        if item.type == "file":
+            s = item.size
+            if s >= 1073741824:   size_str = f" · {s/1073741824:.1f} GB"
+            elif s >= 1048576:    size_str = f" · {s/1048576:.1f} MB"
+            elif s >= 1024:       size_str = f" · {s/1024:.1f} KB"
+            else:                 size_str = f" · {s} B"
+        lines.append(f"{icon} **{item.name}**{size_str}")
+        count += 1
 
     await message.reply_text("\n".join(lines))
 
