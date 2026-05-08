@@ -516,3 +516,72 @@ button:focus,input:focus,select:focus{outline:none;}
     .radio-option{min-height:44px;}
     .upload-option{min-height:48px;}
 }
+
+/* ── Drop Overlay ──────────────────────────────────────────── */
+#drop-overlay{position:fixed;inset:0;background:rgba(13,148,136,.18);backdrop-filter:blur(6px);z-index:9999;display:none;align-items:center;justify-content:center;border:3px dashed rgba(20,184,166,.7);}
+#drop-overlay.active{display:flex;}
+.drop-inner{text-align:center;color:#2dd4bf;pointer-events:none;}
+.drop-inner h2{font-size:1.6rem;font-weight:700;margin:16px 0 8px;}
+.drop-inner p{font-size:.9rem;opacity:.7;}
+
+/* ── Context Menu ──────────────────────────────────────────── */
+#ctx-menu{position:fixed;z-index:9000;background:var(--surface-card,#1e293b);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:6px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;min-width:170px;opacity:0;transform:scale(.95);transition:opacity .12s,transform .12s;}
+#ctx-menu.open{opacity:1;transform:scale(1);}
+.ctx-item{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:.85rem;color:rgba(226,232,240,.85);transition:background .1s;}
+.ctx-item:hover{background:rgba(20,184,166,.15);color:#2dd4bf;}
+.ctx-icon{font-size:1rem;width:20px;text-align:center;}
+
+/* ── File Info Panel ───────────────────────────────────────── */
+#file-info-panel{position:fixed;right:-320px;top:50%;transform:translateY(-50%);width:300px;background:var(--surface-card,#1e293b);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:20px;z-index:8000;box-shadow:0 8px 40px rgba(0,0,0,.5);transition:right .3s cubic-bezier(.34,1.56,.64,1);}
+#file-info-panel.fip-visible{right:16px;}
+.fip-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;font-size:.8rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;}
+.fip-header button{background:none;border:none;color:#64748b;font-size:1rem;cursor:pointer;padding:2px 6px;border-radius:6px;transition:color .1s;}
+.fip-header button:hover{color:#e2e8f0;}
+.fip-icon{font-size:3rem;text-align:center;margin-bottom:8px;}
+.fip-name{font-size:.9rem;font-weight:700;color:#e2e8f0;text-align:center;word-break:break-all;margin-bottom:16px;}
+.fip-table{width:100%;border-collapse:collapse;font-size:.8rem;margin-bottom:16px;}
+.fip-table td{padding:7px 4px;border-bottom:1px solid rgba(255,255,255,.07);}
+.fip-table td:first-child{color:#64748b;font-weight:600;width:72px;}
+.fip-table td:last-child{color:#cbd5e1;word-break:break-all;}
+.fip-path{font-family:monospace;font-size:.72rem;}
+.fip-actions{display:flex;gap:8px;}
+.fip-btn{flex:1;padding:9px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#e2e8f0;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s;}
+.fip-btn:hover{background:rgba(20,184,166,.18);border-color:rgba(20,184,166,.4);color:#2dd4bf;}
+.fip-btn-dl{background:rgba(20,184,166,.12);border-color:rgba(20,184,166,.3);color:#2dd4bf;}
+
+/* ── Shortcuts Modal ───────────────────────────────────────── */
+#shortcuts-modal{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(8px);z-index:9500;display:none;align-items:center;justify-content:center;}
+#shortcuts-modal.open{display:flex;}
+.sc-box{background:var(--surface-card,#1e293b);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:24px;width:min(480px,92vw);box-shadow:0 16px 64px rgba(0,0,0,.6);}
+.sc-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;font-size:1rem;font-weight:700;color:#e2e8f0;}
+.sc-header button{background:none;border:none;color:#64748b;font-size:1.1rem;cursor:pointer;padding:4px 8px;border-radius:8px;}
+.sc-header button:hover{color:#e2e8f0;background:rgba(255,255,255,.08);}
+.sc-list{display:flex;flex-direction:column;gap:8px;}
+.sc-row{display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:10px;background:rgba(255,255,255,.03);}
+.sc-key{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-radius:6px;padding:3px 8px;font-family:monospace;font-size:.8rem;color:#e2e8f0;white-space:nowrap;}
+.sc-desc{font-size:.85rem;color:#94a3b8;}
+
+/* ── Toast Notifications ───────────────────────────────────── */
+#toast-container{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;}
+.toast{background:rgba(30,41,59,.96);border:1px solid rgba(255,255,255,.12);color:#e2e8f0;padding:11px 20px;border-radius:24px;font-size:.85rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transform:translateY(12px) scale(.96);transition:all .3s cubic-bezier(.34,1.56,.64,1);white-space:nowrap;pointer-events:none;}
+.toast.toast-show{opacity:1;transform:translateY(0) scale(1);}
+.toast.toast-success{border-color:rgba(20,184,166,.4);background:rgba(13,148,136,.2);}
+.toast.toast-error{border-color:rgba(239,68,68,.4);background:rgba(185,28,28,.2);}
+
+/* ── Recent Files Sidebar ──────────────────────────────────── */
+.recent-panel-wrap{margin-top:var(--sp-4);}
+.recent-panel-title{font-size:.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;padding:0 4px;}
+#recent-panel{display:flex;flex-direction:column;gap:2px;}
+.recent-item{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:10px;cursor:pointer;transition:background .12s;}
+.recent-item:hover{background:rgba(255,255,255,.06);}
+.recent-icon{font-size:.95rem;flex-shrink:0;}
+.recent-name{font-size:.78rem;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.recent-empty{font-size:.78rem;color:#475569;padding:6px 8px;}
+
+/* ── Grid Image Thumbnails ─────────────────────────────────── */
+.grid-icon.thumb{padding:0;overflow:hidden;background:transparent;border-radius:var(--r-xl);width:100%;height:120px;}
+.grid-thumb{width:100%;height:100%;object-fit:cover;border-radius:var(--r-xl);}
+
+/* ── Shortcut hint button ──────────────────────────────────── */
+.tb-shortcut-hint{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#94a3b8;border-radius:8px;width:32px;height:32px;font-size:.9rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s;margin-left:6px;}
+.tb-shortcut-hint:hover{background:rgba(20,184,166,.18);border-color:rgba(20,184,166,.4);color:#2dd4bf;}
