@@ -25,12 +25,28 @@ async def get_file_ids(client: Client, chat_id, message_id) -> Optional[FileId]:
     media = get_media_from_message(message)
     file_unique_id = await parse_file_unique_id(message)
     file_id = await parse_file_id(message)
-    setattr(file_id, "file_size", getattr(media, "file_size", 0))
-    setattr(file_id, "mime_type", getattr(media, "mime_type", ""))
-    setattr(file_id, "file_name", getattr(media, "file_name", ""))
-    setattr(file_id, "unique_id", file_unique_id)
-    # Store the original file_id string for streaming
-    setattr(file_id, "file_id", media.file_id)
+
+    # Photos use file_sizes (list of PhotoSize) — pick the largest
+    if message.photo:
+        photo = message.photo
+        # file_sizes is a list of PhotoSize objects; pick the largest by file_size
+        if hasattr(photo, "file_sizes") and photo.file_sizes:
+            largest = max(photo.file_sizes, key=lambda s: getattr(s, "file_size", 0))
+            size = largest.file_size
+        else:
+            size = getattr(photo, "file_size", 0)
+        setattr(file_id, "file_size", size)
+        setattr(file_id, "mime_type", "image/jpeg")
+        setattr(file_id, "file_name", getattr(photo, "file_name", "") or "")
+        setattr(file_id, "unique_id", file_unique_id)
+        setattr(file_id, "file_id", photo.file_id)
+    else:
+        setattr(file_id, "file_size", getattr(media, "file_size", 0))
+        setattr(file_id, "mime_type", getattr(media, "mime_type", ""))
+        setattr(file_id, "file_name", getattr(media, "file_name", "") or "")
+        setattr(file_id, "unique_id", file_unique_id)
+        # Store the original file_id string for streaming
+        setattr(file_id, "file_id", media.file_id)
     return file_id
 
 
@@ -54,10 +70,10 @@ def get_media_from_message(message: "Message") -> Any:
 def get_name(media_msg: Union[Message, FileId]) -> str:
     if isinstance(media_msg, Message):
         media = get_media_from_message(media_msg)
-        file_name = getattr(media, "file_name", "")
+        file_name = getattr(media, "file_name", "") or ""
 
     elif isinstance(media_msg, FileId):
-        file_name = getattr(media_msg, "file_name", "")
+        file_name = getattr(media_msg, "file_name", "") or ""
 
     if not file_name:
         if isinstance(media_msg, Message) and media_msg.media:
