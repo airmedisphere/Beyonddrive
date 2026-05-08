@@ -519,6 +519,11 @@
             width: 100vw;
             height: 100vh;
         }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+            to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
     </style>
 </head>
 
@@ -1084,6 +1089,159 @@
             }
         }
 
+        // ── VIDEO RESUME & WATCH HISTORY ──────────────────────
+        const HISTORY_KEY = 'bd_watch_history';
+        const BOOKMARKS_KEY = 'bd_video_bookmarks';
+        const videoId = urlParams.get('id') || videoUrl;
+
+        function getHistory() {
+            try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; }
+        }
+
+        function saveProgress() {
+            if (!video.duration || video.duration < 10) return;
+            const pct = video.currentTime / video.duration;
+            if (pct < 0.02 || pct > 0.97) return;
+            let hist = getHistory().filter(h => h.id !== videoId);
+            hist.unshift({ id: videoId, progress: video.currentTime, duration: video.duration, name: document.title, ts: Date.now() });
+            if (hist.length > 30) hist.pop();
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
+        }
+
+        function getResumePoint() {
+            const item = getHistory().find(h => h.id === videoId);
+            return item ? item.progress : null;
+        }
+
+        function showResumePrompt(resumeAt) {
+            const mins = Math.floor(resumeAt / 60);
+            const secs = Math.floor(resumeAt % 60);
+            const timeStr = mins + ':' + String(secs).padStart(2, '0');
+
+            const banner = document.createElement('div');
+            banner.id = 'resume-banner';
+            banner.style.cssText = `
+                position:absolute;bottom:80px;left:50%;transform:translateX(-50%);
+                background:rgba(14,165,233,0.95);color:#fff;
+                padding:10px 20px;border-radius:12px;font-size:0.9rem;font-weight:600;
+                display:flex;gap:12px;align-items:center;z-index:200;
+                box-shadow:0 4px 20px rgba(0,0,0,0.4);backdrop-filter:blur(8px);
+                animation: slideUp 0.3s ease;`;
+            banner.innerHTML = `
+                <span>▶ Resume from ${timeStr}?</span>
+                <button onclick="video.currentTime=${resumeAt};this.parentElement.remove();" 
+                    style="background:#fff;color:#0ea5e9;border:none;padding:4px 12px;border-radius:8px;cursor:pointer;font-weight:700;">Resume</button>
+                <button onclick="this.parentElement.remove();" 
+                    style="background:rgba(255,255,255,0.2);color:#fff;border:none;padding:4px 10px;border-radius:8px;cursor:pointer;">Start over</button>`;
+            playerContainer.appendChild(banner);
+            setTimeout(() => banner.remove(), 8000);
+        }
+
+        // ── TIMESTAMP BOOKMARKS ────────────────────────────────
+        function getBookmarks() {
+            try { return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}'); } catch { return {}; }
+        }
+
+        function saveBookmark() {
+            if (!video.duration) return;
+            const bk = getBookmarks();
+            if (!bk[videoId]) bk[videoId] = [];
+            const t = video.currentTime;
+            const mins = Math.floor(t / 60), secs = Math.floor(t % 60);
+            const label = prompt(`Bookmark label at ${mins}:${String(secs).padStart(2,'0')}:`, 'Bookmark');
+            if (label === null) return;
+            bk[videoId].push({ t, label: label || 'Bookmark', ts: Date.now() });
+            bk[videoId].sort((a, b) => a.t - b.t);
+            localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bk));
+            renderBookmarks();
+            showFeedback('🔖 Bookmark saved!');
+        }
+
+        function renderBookmarks() {
+            const bk = getBookmarks();
+            const marks = bk[videoId] || [];
+            let panel = document.getElementById('bookmark-panel');
+            if (!panel) {
+                panel = document.createElement('div');
+                panel.id = 'bookmark-panel';
+                panel.style.cssText = `
+                    position:absolute;top:60px;right:10px;
+                    background:rgba(15,23,42,0.95);backdrop-filter:blur(10px);
+                    border-radius:12px;padding:10px;min-width:200px;max-width:260px;
+                    z-index:150;display:none;border:1px solid rgba(255,255,255,0.1);`;
+                playerContainer.appendChild(panel);
+            }
+            if (!marks.length) {
+                panel.innerHTML = '<div style="color:#64748b;font-size:0.8rem;padding:6px;text-align:center;">No bookmarks yet<br><small>Press B to add one</small></div>';
+            } else {
+                panel.innerHTML = '<div style="color:#94a3b8;font-size:0.75rem;font-weight:600;margin-bottom:6px;">📌 BOOKMARKS</div>' +
+                    marks.map((m, i) => {
+                        const mins = Math.floor(m.t/60), secs = Math.floor(m.t%60);
+                        return `<div class="bk-item" data-t="${m.t}" style="display:flex;align-items:center;gap:6px;padding:5px 4px;border-radius:6px;cursor:pointer;font-size:0.82rem;transition:background 0.15s;" 
+                                    onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background=''">
+                                    <span style="color:#38bdf8;font-weight:700;min-width:38px;">${mins}:${String(secs).padStart(2,'0')}</span>
+                                    <span style="color:#e2e8f0;flex:1;">${m.label}</span>
+                                    <span data-i="${i}" class="bk-del" style="color:#64748b;padding:0 2px;" title="Delete">✕</span>
+                                </div>`;
+                    }).join('');
+                panel.querySelectorAll('.bk-item').forEach(el => {
+                    el.addEventListener('click', e => {
+                        if (e.target.classList.contains('bk-del')) {
+                            const idx = parseInt(e.target.dataset.i);
+                            const bk2 = getBookmarks();
+                            bk2[videoId].splice(idx, 1);
+                            localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bk2));
+                            renderBookmarks();
+                        } else {
+                            video.currentTime = parseFloat(el.dataset.t);
+                        }
+                    });
+                });
+            }
+        }
+
+        function showFeedback(text) {
+            const fb = document.getElementById('tapFeedback') || tapFeedback;
+            if (!fb) return;
+            fb.textContent = text;
+            fb.style.top = '50%'; fb.style.left = '50%';
+            fb.style.transform = 'translate(-50%, -50%)';
+            fb.classList.add('show');
+            setTimeout(() => fb.classList.remove('show'), 1500);
+        }
+
+        // Add bookmark button to controls
+        function addBookmarkBtn() {
+            const controlsRow = document.querySelector('.controls-row');
+            if (!controlsRow || document.getElementById('bookmarkBtn')) return;
+
+            const bkBtn = document.createElement('button');
+            bkBtn.id = 'bookmarkBtn';
+            bkBtn.className = 'control-btn';
+            bkBtn.title = 'Bookmark (B)';
+            bkBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>`;
+            bkBtn.addEventListener('click', saveBookmark);
+
+            const toggleBkBtn = document.createElement('button');
+            toggleBkBtn.id = 'toggleBkBtn';
+            toggleBkBtn.className = 'control-btn';
+            toggleBkBtn.title = 'Show Bookmarks';
+            toggleBkBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+                <line x1="8" y1="18" x2="21" y2="18"/>
+                <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+            </svg>`;
+            toggleBkBtn.addEventListener('click', () => {
+                const panel = document.getElementById('bookmark-panel');
+                if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+            });
+
+            controlsRow.appendChild(bkBtn);
+            controlsRow.appendChild(toggleBkBtn);
+        }
+
         // Initialize player when page loads
         document.addEventListener('DOMContentLoaded', () => {
             initPlayer();
@@ -1095,6 +1253,32 @@
                 video.playbackRate = currentSpeed;
                 updateSpeedDisplay();
             }
+
+            // Save progress every 5 seconds
+            setInterval(saveProgress, 5000);
+            window.addEventListener('beforeunload', saveProgress);
+
+            // Add bookmark button
+            addBookmarkBtn();
+            renderBookmarks();
+
+            // Show resume prompt after video metadata loads
+            video.addEventListener('loadedmetadata', () => {
+                const resumeAt = getResumePoint();
+                if (resumeAt && resumeAt > 5) showResumePrompt(resumeAt);
+            });
+
+            // Keyboard: B = bookmark, M = show bookmarks list
+            const origKeyHandler = handleKeyboard;
+            document.addEventListener('keydown', e => {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+                if (e.code === 'KeyB') { e.preventDefault(); saveBookmark(); }
+                if (e.code === 'KeyL') {
+                    e.preventDefault();
+                    const panel = document.getElementById('bookmark-panel');
+                    if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+                }
+            });
         });
 
         // Handle page visibility change
