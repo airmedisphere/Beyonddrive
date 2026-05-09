@@ -7,8 +7,10 @@ function openFolder() {
         path = path + '&auth=' + auth
     }
 
-    // Check if folder is locked before navigating
-    const rawPath = (getCurrentPath() + '/' + folderEl.getAttribute('data-id')).replaceAll('//', '/')
+    // Use data-path + data-id to build the full folder path — must match what lockFolder uses
+    const folderDataPath = folderEl.getAttribute('data-path') || getCurrentPath()
+    const folderDataId   = folderEl.getAttribute('data-id')
+    const rawPath = (folderDataPath + '/' + folderDataId).replaceAll('//', '/')
     checkAndPromptFolderLock(rawPath).then(allowed => {
         if (allowed) window.location.href = `/?path=${path}`
     })
@@ -595,12 +597,39 @@ function showFolderLockModal(folderPath) {
 
 // ── Folder unlock prompt (shown when entering a locked folder) ─────────────
 
+// Session-level cache of unlocked folder paths (survives page navigations via sessionStorage)
+const UNLOCK_CACHE_KEY = 'bd_unlocked_folders'
+
+function getUnlockedFolders() {
+    try { return JSON.parse(sessionStorage.getItem(UNLOCK_CACHE_KEY) || '[]') }
+    catch { return [] }
+}
+
+function markFolderUnlocked(folderPath) {
+    const list = getUnlockedFolders()
+    if (!list.includes(folderPath)) {
+        list.push(folderPath)
+        sessionStorage.setItem(UNLOCK_CACHE_KEY, JSON.stringify(list))
+    }
+}
+
+function isFolderCachedUnlocked(folderPath) {
+    const list = getUnlockedFolders()
+    // Also check parent paths (so unlocking a parent unlocks children)
+    return list.some(p => folderPath === p || folderPath.startsWith(p + '/'))
+}
+
 async function checkAndPromptFolderLock(folderPath) {
     try {
+        // 1. Check client-side session cache first — avoids re-prompting on page nav
+        if (isFolderCachedUnlocked(folderPath)) return true
+
+        // 2. Ask server if this folder is protected
         const res  = await fetch(`/api/v2/folder-password/check/${encodeURIComponent(folderPath.replace(/^\//, ''))}`)
         const data = await res.json()
         if (!data.protected) return true  // not locked, proceed
 
+        // 3. Show password prompt
         return new Promise(resolve => {
             const modal = document.createElement('div')
             modal.className = 'modal'
@@ -615,6 +644,9 @@ async function checkAndPromptFolderLock(folderPath) {
                         <div class="input-group">
                             <label for="unlock-pass">Folder Password</label>
                             <input type="password" id="unlock-pass" placeholder="Enter folder password" autocomplete="off"/>
+                        </div>
+                        <div id="unlock-error" style="color:#ef4444;font-size:0.85rem;margin-top:8px;display:none;">
+                            ❌ Wrong password. Please try again.
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -635,21 +667,42 @@ async function checkAndPromptFolderLock(folderPath) {
                 resolve(result)
             }
 
-            document.getElementById('unlock-cancel').addEventListener('click', () => close(false))
-            document.getElementById('unlock-submit').addEventListener('click', async () => {
+            async function attemptUnlock() {
                 const pass = document.getElementById('unlock-pass').value
                 if (!pass) { alert('Please enter the password.'); return }
-                const r = await fetch('/api/v2/folder-password/verify', {
-                    method: 'POST',
-                    headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({ folder_path: folderPath, password: pass })
-                })
-                const d = await r.json()
-                if (d.status === 'ok') { close(true) }
-                else { alert('❌ Wrong password.') }
-            })
+                const submitBtn = document.getElementById('unlock-submit')
+                submitBtn.textContent = 'Verifying…'
+                submitBtn.disabled = true
+                try {
+                    const r = await fetch('/api/v2/folder-password/verify', {
+                        method: 'POST',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({ folder_path: folderPath, password: pass })
+                    })
+                    const d = await r.json()
+                    if (d.status === 'ok') {
+                        // Cache in sessionStorage so re-visiting same folder in this browser tab won't re-prompt
+                        markFolderUnlocked(folderPath)
+                        close(true)
+                    } else {
+                        const errEl = document.getElementById('unlock-error')
+                        if (errEl) errEl.style.display = 'block'
+                        document.getElementById('unlock-pass').value = ''
+                        document.getElementById('unlock-pass').focus()
+                        submitBtn.textContent = 'Unlock'
+                        submitBtn.disabled = false
+                    }
+                } catch (err) {
+                    submitBtn.textContent = 'Unlock'
+                    submitBtn.disabled = false
+                    alert('Network error — please try again.')
+                }
+            }
+
+            document.getElementById('unlock-cancel').addEventListener('click', () => close(false))
+            document.getElementById('unlock-submit').addEventListener('click', attemptUnlock)
             document.getElementById('unlock-pass').addEventListener('keydown', e => {
-                if (e.key === 'Enter') document.getElementById('unlock-submit').click()
+                if (e.key === 'Enter') attemptUnlock()
             })
         })
     } catch (e) {
