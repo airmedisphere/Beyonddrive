@@ -768,24 +768,47 @@ class DuplicateDetector:
 
 class FolderPasswordManager:
     """Manage folder-level password protection"""
-    
+
+    PERSIST_FILE = Path("backend/folder_passwords.json")
+
     def __init__(self):
         self.folder_passwords: Dict[str, str] = {}  # folder_path -> password_hash
         self.unlocked_sessions: Dict[str, Set[str]] = defaultdict(set)  # session_token -> unlocked_paths
-    
+        self._load()
+
+    def _load(self):
+        """Load persisted folder passwords from disk."""
+        try:
+            if self.PERSIST_FILE.exists():
+                with open(self.PERSIST_FILE, "r") as f:
+                    self.folder_passwords = json.load(f)
+        except Exception:
+            self.folder_passwords = {}
+
+    def _save(self):
+        """Persist folder passwords to disk."""
+        try:
+            self.PERSIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.PERSIST_FILE, "w") as f:
+                json.dump(self.folder_passwords, f, indent=2)
+        except Exception:
+            pass
+
     def _hash_password(self, password: str) -> str:
         """Hash folder password"""
         return hashlib.sha256(f"folder_{password}".encode()).hexdigest()
-    
+
     def set_password(self, folder_path: str, password: str) -> bool:
         """Set password for folder"""
         self.folder_passwords[folder_path] = self._hash_password(password)
+        self._save()
         return True
-    
+
     def remove_password(self, folder_path: str) -> bool:
         """Remove password from folder"""
         if folder_path in self.folder_passwords:
             del self.folder_passwords[folder_path]
+            self._save()
             return True
         return False
     
