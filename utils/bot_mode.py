@@ -9,6 +9,11 @@ from pathlib import Path
 
 logger = Logger(f"{__name__}")
 
+# Strong references to background import tasks — prevents Python GC from
+# collecting tasks during asyncio.sleep() between forward batches
+_BULK_IMPORT_TASKS: set = set()
+
+
 START_CMD = """🚀 **Welcome To TG Drive's Bot Mode**
 
 You can use this bot to upload files to your TG Drive website directly instead of doing it from website.
@@ -641,7 +646,8 @@ async def bulk_import_handler(client: Client, message: Message):
     )
 
     # Start the bulk import task
-    asyncio.create_task(
+    # IMPORTANT: store reference to prevent garbage collection mid-execution
+    _task = asyncio.create_task(
         bulk_import_files(
             client, 
             message.chat.id, 
@@ -651,6 +657,9 @@ async def bulk_import_handler(client: Client, message: Message):
             BOT_MODE.current_folder
         )
     )
+    # Keep strong reference so GC doesn't kill the task during asyncio.sleep
+    _BULK_IMPORT_TASKS.add(_task)
+    _task.add_done_callback(_BULK_IMPORT_TASKS.discard)
 
 
 def parse_telegram_link(link):
