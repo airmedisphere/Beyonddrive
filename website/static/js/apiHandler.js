@@ -168,6 +168,11 @@ fileInput.addEventListener('change', async (e) => {
 });
 
 cancelButton.addEventListener('click', () => {
+    if (_currentImportId) {
+        // Cancel a running bulk import
+        cancelCurrentImport()
+        return
+    }
     if (uploadStep === 1) {
         uploadRequest.abort();
     } else if (uploadStep === 2) {
@@ -348,144 +353,168 @@ async function Start_URL_Upload() {
 
 // Smart Bulk Import Start
 
+let _currentImportId = null;
+let _importPollTimer = null;
+
+function _parseChannelIdentifier(raw) {
+    raw = raw.trim();
+    // t.me/username/msgid  or  t.me/username
+    const m = raw.match(/t\.me\/([^\/\?]+)/);
+    if (m) return m[1];
+    return raw;
+}
+
 async function checkChannelAdmin(channel) {
     const data = { 'channel': channel }
     const json = await postJson('/api/checkChannelAdmin', data)
     return json
 }
 
+async function checkChannel() {
+    const channel = document.getElementById('smart-bulk-channel').value.trim()
+    if (!channel) { alert('Please enter a channel identifier'); return; }
+
+    const channelIdentifier = _parseChannelIdentifier(channel)
+    const statusDiv = document.getElementById('channel-status')
+    statusDiv.innerHTML = '<em>Checking...</em>'
+    statusDiv.style.display = 'block'
+
+    try {
+        const result = await checkChannelAdmin(channelIdentifier)
+        if (result.status === 'ok') {
+            const adminBadge = result.is_admin
+                ? '✅ Bot is admin — Fast Import available'
+                : '👤 Bot not admin — Regular Import will be used (works for public channels)';
+            statusDiv.innerHTML = `
+                <div class="channel-status-success">
+                    <strong>✅ Channel: ${result.channel_name}</strong><br>
+                    <span>${adminBadge}</span>
+                </div>`
+        } else {
+            statusDiv.innerHTML = `
+                <div class="channel-status-error">
+                    <strong>❌ ${result.message || result.status}</strong><br>
+                    <span>For public channels you do <u>not</u> need to add the bot.</span>
+                </div>`
+        }
+    } catch (err) {
+        statusDiv.innerHTML = `<div class="channel-status-error"><strong>❌ ${err.message || err}</strong></div>`
+    }
+}
+
 async function Start_Smart_Bulk_Import() {
     try {
+        // Close modal
         document.getElementById('smart-bulk-import-modal').style.opacity = '0';
-        setTimeout(() => {
-            document.getElementById('smart-bulk-import-modal').style.zIndex = '-1';
-        }, 300)
+        setTimeout(() => { document.getElementById('smart-bulk-import-modal').style.zIndex = '-1'; }, 300)
 
-        const channel = document.getElementById('smart-bulk-channel').value.trim()
-        const startMsg = document.getElementById('smart-bulk-start-msg').value.trim()
-        const endMsg = document.getElementById('smart-bulk-end-msg').value.trim()
+        const channel    = document.getElementById('smart-bulk-channel').value.trim()
+        const startMsg   = document.getElementById('smart-bulk-start-msg').value.trim()
+        const endMsg     = document.getElementById('smart-bulk-end-msg').value.trim()
         const importMode = document.querySelector('input[name="import-mode"]:checked').value
 
-        if (!channel) {
-            throw new Error('Channel identifier is required')
-        }
+        if (!channel) throw new Error('Channel identifier is required')
 
-        // Parse message link if provided
-        let channelIdentifier = channel
-        if (channel.includes('t.me/')) {
-            const match = channel.match(/t\.me\/([^\/]+)/)
-            if (match) {
-                channelIdentifier = match[1]
-            }
-        }
+        const channelIdentifier = _parseChannelIdentifier(channel)
 
         const data = {
-            'channel': channelIdentifier,
-            'path': getCurrentPath(),
-            'import_mode': importMode
+            channel: channelIdentifier,
+            path: getCurrentPath(),
+            import_mode: importMode
         }
 
-        // Add message range if provided
         if (startMsg && endMsg) {
-            const startMsgId = parseInt(startMsg)
-            const endMsgId = parseInt(endMsg)
-            
-            if (isNaN(startMsgId) || isNaN(endMsgId)) {
-                throw new Error('Message IDs must be valid numbers')
-            }
-            
-            if (startMsgId >= endMsgId) {
-                throw new Error('Start message ID must be less than end message ID')
-            }
-            
-            data.start_msg_id = startMsgId
-            data.end_msg_id = endMsgId
+            const s = parseInt(startMsg), e = parseInt(endMsg)
+            if (isNaN(s) || isNaN(e)) throw new Error('Message IDs must be numbers')
+            if (s >= e) throw new Error('Start ID must be less than End ID')
+            data.start_msg_id = s
+            data.end_msg_id   = e
         }
 
-        // Show progress
+        // Show uploader panel
         document.getElementById('bg-blur').style.zIndex = '2';
         document.getElementById('bg-blur').style.opacity = '0.1';
         document.getElementById('file-uploader').style.zIndex = '3';
         document.getElementById('file-uploader').style.opacity = '1';
 
-        document.getElementById('upload-filename').innerText = 'Channel: ' + channelIdentifier;
-        document.getElementById('upload-filesize').innerText = 'Smart Bulk Import in progress...';
-        document.getElementById('upload-status').innerText = `Status: ${importMode === 'auto' ? 'Auto-detecting best method' : importMode === 'fast' ? 'Fast importing (direct reference)' : 'Regular importing (copying to storage)'}`;
-        document.getElementById('upload-percent').innerText = 'Progress: Starting...';
-        progressBar.style.width = '50%';
+        document.getElementById('upload-filename').innerText = '📡 Channel: ' + channelIdentifier
+        document.getElementById('upload-filesize').innerText = 'Scanning channel...'
+        document.getElementById('upload-status').innerText   = 'Status: Starting'
+        document.getElementById('upload-percent').innerText  = '0%'
+        progressBar.style.width = '2%'
 
-        const json = await postJson('/api/smartBulkImport', data)
+        // Start import task (returns immediately with import_id)
+        const startJson = await postJson('/api/smartBulkImport', data)
+        if (startJson.status !== 'started') throw new Error(startJson.status || 'Failed to start import')
 
-        if (json.status === 'ok') {
-            progressBar.style.width = '100%';
-            document.getElementById('upload-percent').innerText = 'Progress: 100%';
-            
-            const methodText = json.method === 'fast_import' ? 'Fast Import (Direct Reference)' : 'Regular Import (Copied to Storage)'
-            document.getElementById('upload-status').innerText = `Status: Completed using ${methodText}!`;
-            
-            setTimeout(() => {
-                alert(`🧠 Smart Bulk Import Completed!\n\nMethod: ${methodText}\nImported: ${json.imported} files\nTotal: ${json.total} files\n\nFiles are now available on your drive!`)
-                window.location.reload();
-            }, 1000)
-        } else {
-            throw new Error(json.status)
-        }
+        _currentImportId = startJson.import_id
+
+        // Poll progress
+        _importPollTimer = setInterval(async () => {
+            try {
+                const resp = await postJson('/api/getImportProgress', { import_id: _currentImportId })
+                if (resp.status !== 'ok') return
+
+                const d = resp.data
+                const total   = d.total_media   || d.total_scan || 1
+                const done    = (d.imported || 0) + (d.errors || 0)
+                const pct     = total > 0 ? Math.min(99, Math.round(done / total * 100)) : 1
+
+                // Status label
+                const statusLabels = {
+                    validating: 'Validating channel...',
+                    scanning:   'Scanning channel history...',
+                    fetching:   `Fetching file list — ${d.fetched || 0}/${d.total_scan || '?'} messages`,
+                    importing:  `Importing — ${d.imported || 0} done, ${d.errors || 0} errors`,
+                    done:       '✅ Import complete!',
+                    cancelled:  '⚠️ Import cancelled',
+                    error:      '❌ Error: ' + (d.error_msg || 'unknown'),
+                }
+                const statusText = statusLabels[d.status] || d.status
+
+                document.getElementById('upload-filename').innerText = `📡 ${d.channel_name || channelIdentifier}`
+                document.getElementById('upload-filesize').innerText =
+                    d.total_media ? `${d.total_media} files found` : `Scanning...`
+                document.getElementById('upload-status').innerText =
+                    `Method: ${d.method === 'fast' ? '⚡ Fast Import' : d.method === 'regular' ? '📦 Regular Import' : '🧠 Auto'} | ${statusText}`
+                document.getElementById('upload-percent').innerText = pct + '%'
+                progressBar.style.width = pct + '%'
+
+                if (d.status === 'done') {
+                    clearInterval(_importPollTimer)
+                    progressBar.style.width = '100%'
+                    document.getElementById('upload-percent').innerText = '100%'
+                    const elapsed = d.elapsed ? ` in ${d.elapsed}s` : ''
+                    const method  = d.method === 'fast' ? 'Fast Import (Direct Reference)' : 'Regular Import (Copied to Storage)'
+                    setTimeout(() => {
+                        alert(`✅ Bulk Import Complete!\n\nMethod: ${method}\nImported: ${d.imported}\nMedia found: ${d.total_media}\nErrors: ${d.errors}${elapsed}\n\nFiles are now available on your drive!`)
+                        window.location.reload()
+                    }, 600)
+                } else if (d.status === 'error' || d.status === 'cancelled') {
+                    clearInterval(_importPollTimer)
+                    throw new Error(d.error_msg || 'Import ' + d.status)
+                }
+            } catch (pollErr) {
+                if (pollErr.message && pollErr.message.includes('Import')) {
+                    clearInterval(_importPollTimer)
+                    alert('Import Error: ' + pollErr.message)
+                    window.location.reload()
+                }
+            }
+        }, 1200)  // poll every 1.2 seconds
 
     } catch (err) {
-        alert(`Smart Bulk Import Error: ${err.message || err}`)
+        if (_importPollTimer) clearInterval(_importPollTimer)
+        alert('Smart Bulk Import Error: ' + (err.message || err))
         window.location.reload()
     }
 }
 
-async function checkChannel() {
-    const channel = document.getElementById('smart-bulk-channel').value.trim()
-    
-    if (!channel) {
-        alert('Please enter a channel identifier')
-        return
-    }
-
-    // Parse message link if provided
-    let channelIdentifier = channel
-    if (channel.includes('t.me/')) {
-        const match = channel.match(/t\.me\/([^\/]+)/)
-        if (match) {
-            channelIdentifier = match[1]
-        }
-    }
-
-    try {
-        const result = await checkChannelAdmin(channelIdentifier)
-        const statusDiv = document.getElementById('channel-status')
-        
-        if (result.status === 'ok') {
-            statusDiv.innerHTML = `
-                <div class="channel-status-success">
-                    <strong>✅ Channel Found: ${result.channel_name}</strong><br>
-                    <span>Bot Admin Status: ${result.is_admin ? '✅ Admin (Fast Import Available)' : '❌ Not Admin (Regular Import Only)'}</span><br>
-                    <span>Recommended: ${result.is_admin ? '⚡ Fast Import or 🧠 Auto-Detect' : '📦 Regular Import or 🧠 Auto-Detect'}</span>
-                </div>
-            `
-        } else {
-            statusDiv.innerHTML = `
-                <div class="channel-status-error">
-                    <strong>❌ Error: ${result.message}</strong><br>
-                    <span>Please check the channel identifier and try again.</span>
-                </div>
-            `
-        }
-        
-        statusDiv.style.display = 'block'
-        
-    } catch (err) {
-        const statusDiv = document.getElementById('channel-status')
-        statusDiv.innerHTML = `
-            <div class="channel-status-error">
-                <strong>❌ Error checking channel</strong><br>
-                <span>${err.message || err}</span>
-            </div>
-        `
-        statusDiv.style.display = 'block'
+async function cancelCurrentImport() {
+    if (_currentImportId) {
+        await postJson('/api/cancelImport', { import_id: _currentImportId })
+        if (_importPollTimer) clearInterval(_importPollTimer)
+        window.location.reload()
     }
 }
 
