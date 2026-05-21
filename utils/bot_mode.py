@@ -773,93 +773,83 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
             f"**Status:** Starting copy..."
         )
 
-        # ── Phase 2: bulk forward_messages (server-side, no re-upload) ──────
-        # forward_messages sends ALL IDs in ONE raw API call per batch.
-        # This is pure server-side copy — no bandwidth used, near-instant.
-        FORWARD_BATCH = 100   # Telegram allows up to 100 per forward call
-        FWRD_WORKERS  = 4     # 4 parallel batches = 400 files simultaneously
+        # ── Phase 2: sequential forward_messages batches (server-side) ────────
+        # Each call forwards 100 files in ONE raw MTProto call — no re-upload.
+        # Sequential with 2.5s delay avoids flood waits (parallel = same speed
+        # but with retries and wasted time).
+        FORWARD_BATCH  = 100
+        INTER_DELAY    = 2.5   # seconds between batches
 
-        meta = {row[0]: row[1:] for row in file_list}
+        meta    = {row[0]: row[1:] for row in file_list}
         all_ids = [row[0] for row in file_list]
         batches = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
+        total_batches = len(batches)
 
-        sem  = asyncio.Semaphore(FWRD_WORKERS)
-        lock = asyncio.Lock()
-
-        async def forward_batch(batch_ids):
-            nonlocal imported_count, error_count
-            async with sem:
-                for attempt in range(4):
-                    try:
-                        forwarded = await client.forward_messages(
-                            chat_id=config.STORAGE_CHANNEL,
-                            from_chat_id=channel_id,
-                            message_ids=batch_ids,
-                            hide_sender_name=True,
-                            disable_notification=True,
-                        )
-                        if not isinstance(forwarded, list):
-                            forwarded = [forwarded] if forwarded else []
-
-                        for fwd_msg in forwarded:
-                            if not fwd_msg:
-                                continue
-                            fwd_media = (fwd_msg.document or fwd_msg.video or fwd_msg.audio
-                                         or fwd_msg.photo or fwd_msg.sticker)
-                            orig_id = None
-                            fwd_origin = getattr(fwd_msg, "forward_origin", None)
-                            if fwd_origin:
-                                orig_id = getattr(fwd_origin, "message_id", None)
-
-                            if orig_id and orig_id in meta:
-                                fname, fsize, fdur = meta[orig_id]
-                            else:
-                                fname = (getattr(fwd_media, "file_name", None) or f"file_{fwd_msg.id}") if fwd_media else f"file_{fwd_msg.id}"
-                                fsize = (getattr(fwd_media, "file_size", 0) or 0) if fwd_media else 0
-                                fdur  = (getattr(fwd_media, "duration", 0) if fwd_media and hasattr(fwd_media, "duration") else 0)
-
-                            DRIVE_DATA.new_file(destination_folder, fname, fwd_msg.id, fsize, fdur)
-                            async with lock:
-                                imported_count += 1
-                        return
-                    except Exception as e:
-                        err = str(e)
-                        if "FLOOD_WAIT" in err:
-                            wait = 30
-                            try: wait = min(int(err.split("_")[-1]), 30)
-                            except Exception: pass
-                            await asyncio.sleep(wait)
-                        elif attempt < 3:
-                            await asyncio.sleep(2 ** attempt)
-                        else:
-                            logger.error(f"Forward batch failed: {e}")
-                            async with lock:
-                                error_count += len(batch_ids)
-
-        tasks = [asyncio.create_task(forward_batch(b)) for b in batches]
-
-        last_report = 0
-        while True:
-            done = imported_count + error_count
-            if done - last_report >= 50 or done >= total_media:
-                last_report = done
-                pct = int(done / total_media * 100) if total_media else 0
+        for batch_num, batch_ids in enumerate(batches):
+            for attempt in range(5):
                 try:
-                    await status_msg.edit_text(
-                        f"📊 **Import Progress**\n\n"
-                        f"**Total media:** {total_media:,}\n"
-                        f"**Imported:** {imported_count:,}\n"
-                        f"**Errors:** {error_count:,}\n"
-                        f"**Progress:** {pct}%\n"
-                        f"**Method:** ⚡ Bulk Forward (server-side)"
+                    forwarded = await client.forward_messages(
+                        chat_id=config.STORAGE_CHANNEL,
+                        from_chat_id=channel_id,
+                        message_ids=batch_ids,
+                        hide_sender_name=True,
+                        disable_notification=True,
                     )
-                except Exception:
-                    pass
-            if all(t.done() for t in tasks):
-                break
-            await asyncio.sleep(0.5)
+                    if not isinstance(forwarded, list):
+                        forwarded = [forwarded] if forwarded else []
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+                    for fwd in forwarded:
+                        if not fwd:
+                            continue
+                        fm = (fwd.document or fwd.video or fwd.audio or fwd.photo or fwd.sticker)
+                        orig_id = None
+                        origin  = getattr(fwd, "forward_origin", None)
+                        if origin:
+                            orig_id = getattr(origin, "message_id", None)
+
+                        if orig_id and orig_id in meta:
+                            fname, fsize, fdur = meta[orig_id]
+                        else:
+                            fname = (getattr(fm, "file_name", None) or f"file_{fwd.id}") if fm else f"file_{fwd.id}"
+                            fsize = (getattr(fm, "file_size", 0) or 0) if fm else 0
+                            fdur  = (getattr(fm, "duration", 0) if fm and hasattr(fm, "duration") else 0)
+
+                        DRIVE_DATA.new_file(destination_folder, fname, fwd.id, fsize, fdur)
+                        imported_count += 1
+                    break  # success
+
+                except Exception as e:
+                    err = str(e)
+                    if "FLOOD_WAIT" in err:
+                        wait = 35
+                        try: wait = min(int(err.split("_")[-1]), 35)
+                        except Exception: pass
+                        logger.warning(f"Flood wait {wait}s on batch {batch_num+1}")
+                        await asyncio.sleep(wait)
+                    elif attempt < 4:
+                        await asyncio.sleep(2 ** attempt)
+                    else:
+                        logger.error(f"Batch {batch_num+1} failed: {e}")
+                        error_count += len(batch_ids)
+
+            # Progress update every batch
+            pct = int((batch_num + 1) / total_batches * 100)
+            try:
+                await status_msg.edit_text(
+                    f"📊 **Import Progress**\n\n"
+                    f"**Total media:** {total_media:,}\n"
+                    f"**Imported:** {imported_count:,}\n"
+                    f"**Errors:** {error_count:,}\n"
+                    f"**Batch:** {batch_num+1}/{total_batches}\n"
+                    f"**Progress:** {pct}%\n"
+                    f"**Method:** ⚡ Bulk Forward (server-side, no re-upload)"
+                )
+            except Exception:
+                pass
+
+            # Polite inter-batch delay to avoid flood waits
+            if batch_num < total_batches - 1:
+                await asyncio.sleep(INTER_DELAY)
 
         success_rate = (imported_count / total_media * 100) if total_media else 0
         await client.send_message(
