@@ -773,47 +773,75 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
             f"**Status:** Starting copy..."
         )
 
-        # ── Phase 2: concurrent copy_message ─────────────────────────────────
-        sem = asyncio.Semaphore(COPY_CONCURRENCY)
+        # ── Phase 2: bulk forward_messages (server-side, no re-upload) ──────
+        # forward_messages sends ALL IDs in ONE raw API call per batch.
+        # This is pure server-side copy — no bandwidth used, near-instant.
+        FORWARD_BATCH = 100   # Telegram allows up to 100 per forward call
+        FWRD_WORKERS  = 4     # 4 parallel batches = 400 files simultaneously
+
+        meta = {row[0]: row[1:] for row in file_list}
+        all_ids = [row[0] for row in file_list]
+        batches = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
+
+        sem  = asyncio.Semaphore(FWRD_WORKERS)
         lock = asyncio.Lock()
 
-        async def copy_one(msg_id, fname, fsize, fdur):
+        async def forward_batch(batch_ids):
             nonlocal imported_count, error_count
             async with sem:
-                try:
-                    copied = await client.copy_message(
-                        chat_id=config.STORAGE_CHANNEL,
-                        from_chat_id=channel_id,
-                        message_id=msg_id,
-                        disable_notification=True,
-                    )
-                    copied_media = (
-                        copied.document or copied.video or copied.audio
-                        or copied.photo or copied.sticker
-                    )
-                    real_fname = getattr(copied_media, "file_name", None) or fname
-                    real_size  = getattr(copied_media, "file_size", fsize) or fsize
-                    DRIVE_DATA.new_file(destination_folder, real_fname, copied.id, real_size, fdur)
-                    async with lock:
-                        imported_count += 1
-                except Exception as e:
-                    err_str = str(e)
-                    logger.error(f"Error copying msg {msg_id}: {err_str}")
-                    if "FLOOD_WAIT" in err_str:
-                        wait = 5
-                        try: wait = int(err_str.split("_")[-1])
-                        except Exception: pass
-                        await asyncio.sleep(min(wait, 30))
-                    async with lock:
-                        error_count += 1
+                for attempt in range(4):
+                    try:
+                        forwarded = await client.forward_messages(
+                            chat_id=config.STORAGE_CHANNEL,
+                            from_chat_id=channel_id,
+                            message_ids=batch_ids,
+                            hide_sender_name=True,
+                            disable_notification=True,
+                        )
+                        if not isinstance(forwarded, list):
+                            forwarded = [forwarded] if forwarded else []
 
-        # Launch all copies; update status every 50 completions
-        tasks = [asyncio.create_task(copy_one(*f)) for f in file_list]
+                        for fwd_msg in forwarded:
+                            if not fwd_msg:
+                                continue
+                            fwd_media = (fwd_msg.document or fwd_msg.video or fwd_msg.audio
+                                         or fwd_msg.photo or fwd_msg.sticker)
+                            orig_id = None
+                            fwd_origin = getattr(fwd_msg, "forward_origin", None)
+                            if fwd_origin:
+                                orig_id = getattr(fwd_origin, "message_id", None)
+
+                            if orig_id and orig_id in meta:
+                                fname, fsize, fdur = meta[orig_id]
+                            else:
+                                fname = (getattr(fwd_media, "file_name", None) or f"file_{fwd_msg.id}") if fwd_media else f"file_{fwd_msg.id}"
+                                fsize = (getattr(fwd_media, "file_size", 0) or 0) if fwd_media else 0
+                                fdur  = (getattr(fwd_media, "duration", 0) if fwd_media and hasattr(fwd_media, "duration") else 0)
+
+                            DRIVE_DATA.new_file(destination_folder, fname, fwd_msg.id, fsize, fdur)
+                            async with lock:
+                                imported_count += 1
+                        return
+                    except Exception as e:
+                        err = str(e)
+                        if "FLOOD_WAIT" in err:
+                            wait = 30
+                            try: wait = min(int(err.split("_")[-1]), 30)
+                            except Exception: pass
+                            await asyncio.sleep(wait)
+                        elif attempt < 3:
+                            await asyncio.sleep(2 ** attempt)
+                        else:
+                            logger.error(f"Forward batch failed: {e}")
+                            async with lock:
+                                error_count += len(batch_ids)
+
+        tasks = [asyncio.create_task(forward_batch(b)) for b in batches]
 
         last_report = 0
         while True:
             done = imported_count + error_count
-            if done - last_report >= 50 or done == total_media:
+            if done - last_report >= 50 or done >= total_media:
                 last_report = done
                 pct = int(done / total_media * 100) if total_media else 0
                 try:
@@ -822,7 +850,8 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         f"**Total media:** {total_media:,}\n"
                         f"**Imported:** {imported_count:,}\n"
                         f"**Errors:** {error_count:,}\n"
-                        f"**Progress:** {pct}%"
+                        f"**Progress:** {pct}%\n"
+                        f"**Method:** ⚡ Bulk Forward (server-side)"
                     )
                 except Exception:
                     pass
