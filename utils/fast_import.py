@@ -217,19 +217,14 @@ class SmartImportManager:
                         if not fwd:
                             continue
                         fm = _media(fwd)
+                        if not fm:
+                            continue  # message had no media, skipped by TG
 
-                        # Try to match back to original metadata
-                        orig_id = None
-                        origin  = getattr(fwd, "forward_origin", None)
-                        if origin:
-                            orig_id = getattr(origin, "message_id", None)
-
-                        if orig_id and orig_id in meta:
-                            fname, fsize, fdur = meta[orig_id]
-                        else:
-                            fname = (getattr(fm, "file_name", None) or f"file_{fwd.id}") if fm else f"file_{fwd.id}"
-                            fsize = (getattr(fm, "file_size", 0) or 0) if fm else 0
-                            fdur  = (getattr(fm, "duration", 0) if fm and hasattr(fm, "duration") else 0)
+                        # Always use real metadata from the forwarded message
+                        # (more reliable than matching back to placeholder scan data)
+                        fname = getattr(fm, "file_name", None) or f"file_{fwd.id}"
+                        fsize = getattr(fm, "file_size", 0) or 0
+                        fdur  = getattr(fm, "duration", 0) if hasattr(fm, "duration") else 0
 
                         DRIVE_DATA.new_file(destination_folder, fname, fwd.id, fsize, fdur)
                         IMPORT_PROGRESS[import_id]["imported"] += 1
@@ -315,8 +310,18 @@ class SmartImportManager:
 
         # Build message ID list
         if start_msg_id and end_msg_id:
-            msg_ids = list(range(start_msg_id, end_msg_id + 1))
+            # Range provided: skip scan entirely — forward_messages skips non-media silently
+            all_ids = list(range(start_msg_id, end_msg_id + 1))
+            IMPORT_PROGRESS[import_id].update({
+                "total_scan":  len(all_ids),
+                "fetched":     len(all_ids),
+                "status":      "importing",
+            })
+            # For regular import, use IDs directly as file_list placeholders
+            # (fname/fsize/fdur will be extracted from forwarded messages)
+            file_list = [(mid, f"file_{mid}", 0, 0) for mid in all_ids]
         else:
+            # No range: must scan history to find media message IDs
             IMPORT_PROGRESS[import_id]["status"] = "scanning"
             msg_ids = []
             async for msg in client.get_chat_history(channel_id):
@@ -324,13 +329,11 @@ class SmartImportManager:
                     msg_ids.append(msg.id)
             msg_ids.reverse()
 
-        IMPORT_PROGRESS[import_id].update({
-            "total_scan": len(msg_ids),
-            "status":     "fetching",
-        })
-
-        # Phase 1: scan
-        file_list = await self._scan_media(client, channel_id, msg_ids, import_id)
+            IMPORT_PROGRESS[import_id].update({
+                "total_scan": len(msg_ids),
+                "status":     "fetching",
+            })
+            file_list = await self._scan_media(client, channel_id, msg_ids, import_id)
 
         IMPORT_PROGRESS[import_id].update({
             "total_media": len(file_list),

@@ -680,16 +680,19 @@ def parse_telegram_link(link):
 
 async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id, destination_folder):
     """
-    Import files in bulk from a Telegram channel/group.
-    Phase 1: Batch get_messages (200/call) with flood-wait handling + 0.3s delay.
-    Phase 2: Sequential forward_messages (100/call) - server-side, no re-upload.
+    Maximum-speed bulk import using forward_messages ONLY.
+
+    KEY INSIGHT: We don't scan at all. forward_messages silently skips
+    messages with no media, so we can forward the entire ID range directly.
+    This eliminates the entire Phase 1 get_messages scan that was causing
+    flood waits and server restarts.
+
+    One forward_messages call = 100 files = ~instant (server-side copy).
     """
     global DRIVE_DATA
 
-    SCAN_BATCH    = 200
-    SCAN_DELAY    = 0.3   # prevent scan flood wait
     FORWARD_BATCH = 100
-    INTER_DELAY   = 2.5   # prevent forward flood wait
+    INTER_DELAY   = 2.5   # seconds between batches — prevents flood wait
 
     try:
         try:
@@ -699,105 +702,29 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
             await client.send_message(
                 user_chat_id,
                 f"\u274c **Error accessing channel**\n\n"
-                f"Could not access channel `{channel_name}`.\n\n"
+                f"Could not access `{channel_name}`.\n\n"
                 f"**Error:** {str(e)}"
             )
             return
 
         total_range = end_id - start_id + 1
-        msg_ids = list(range(start_id, end_id + 1))
+        all_ids     = list(range(start_id, end_id + 1))
+        batches     = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
+        total_batches = len(batches)
+        eta_s = int(total_batches * INTER_DELAY)
 
         imported_count = 0
-        skipped_count  = 0
         error_count    = 0
-        file_list      = []
 
-        total_scan_batches = (len(msg_ids) + SCAN_BATCH - 1) // SCAN_BATCH
         status_msg = await client.send_message(
             user_chat_id,
-            f"\U0001f50d **Scanning {total_range:,} messages...**\n\n"
+            f"\u26a1 **Starting Bulk Forward Import**\n\n"
             f"**Channel:** {channel_name}\n"
-            f"**Range:** {start_id:,} \u2192 {end_id:,}\n"
-            f"**Scan batches:** {total_scan_batches} \u00d7 {SCAN_BATCH} IDs each"
-        )
-
-        # Phase 1: batch get_messages with flood-wait handling
-        for i in range(0, len(msg_ids), SCAN_BATCH):
-            batch = msg_ids[i : i + SCAN_BATCH]
-            messages = []
-
-            for attempt in range(4):
-                try:
-                    raw = await client.get_messages(channel_id, batch)
-                    messages = raw if isinstance(raw, list) else [raw]
-                    break
-                except Exception as e:
-                    err = str(e)
-                    if "FLOOD_WAIT" in err:
-                        wait = 35
-                        try: wait = min(int(err.split("_")[-1]), 35)
-                        except Exception: pass
-                        logger.warning(f"Scan flood wait {wait}s")
-                        try:
-                            await status_msg.edit_text(
-                                f"\u23f3 **Scan paused - flood wait {wait}s**\n\n"
-                                f"**Scanned:** {i:,}/{len(msg_ids):,}\n"
-                                f"**Media found so far:** {len(file_list):,}"
-                            )
-                        except Exception: pass
-                        await asyncio.sleep(wait)
-                    elif attempt < 3:
-                        await asyncio.sleep(2)
-                    else:
-                        logger.warning(f"Scan batch {batch[0]}-{batch[-1]} failed: {e}")
-                        skipped_count += len(batch)
-
-            for msg in messages:
-                if not msg or getattr(msg, "empty", True):
-                    skipped_count += 1
-                    continue
-                media = msg.document or msg.video or msg.audio or msg.photo or msg.sticker
-                if not media:
-                    skipped_count += 1
-                    continue
-                fname = getattr(media, "file_name", None) or f"file_{msg.id}"
-                fsize = getattr(media, "file_size", 0) or 0
-                fdur  = getattr(media, "duration", 0) if hasattr(media, "duration") else 0
-                file_list.append((msg.id, fname, fsize, fdur))
-
-            pct = min(100, int((i + len(batch)) / len(msg_ids) * 100))
-            try:
-                await status_msg.edit_text(
-                    f"\U0001f50d **Scan: {pct}%**\n\n"
-                    f"**Scanned:** {i + len(batch):,}/{len(msg_ids):,}\n"
-                    f"**Media found:** {len(file_list):,}\n"
-                    f"**Skipped:** {skipped_count:,}"
-                )
-            except Exception:
-                pass
-
-            await asyncio.sleep(SCAN_DELAY)
-
-        total_media = len(file_list)
-
-        if total_media == 0:
-            await status_msg.edit_text("\u26a0\ufe0f **No media found** in the specified range.")
-            return
-
-        total_fwd_batches = (total_media + FORWARD_BATCH - 1) // FORWARD_BATCH
-        eta_s = int(total_fwd_batches * INTER_DELAY)
-        await status_msg.edit_text(
-            f"\u26a1 **Importing {total_media:,} files via Bulk Forward**\n\n"
-            f"**Method:** Server-side copy (no re-upload, no bandwidth used)\n"
-            f"**Batches:** {total_fwd_batches} \u00d7 {FORWARD_BATCH} files\n"
+            f"**Range:** {start_id:,} \u2192 {end_id:,} ({total_range:,} messages)\n"
+            f"**Batches:** {total_batches} \u00d7 {FORWARD_BATCH} IDs\n"
             f"**Est. time:** ~{eta_s}s ({eta_s//60}m {eta_s%60}s)\n"
-            f"**Skipped (no media):** {skipped_count:,}"
+            f"**Method:** Server-side copy (no scan, no re-upload)"
         )
-
-        # Phase 2: sequential forward_messages (server-side bulk copy)
-        meta    = {row[0]: row[1:] for row in file_list}
-        all_ids = [row[0] for row in file_list]
-        batches = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
 
         for batch_num, batch_ids in enumerate(batches):
             for attempt in range(5):
@@ -816,21 +743,17 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         if not fwd:
                             continue
                         fm = fwd.document or fwd.video or fwd.audio or fwd.photo or fwd.sticker
-                        orig_id = None
-                        origin  = getattr(fwd, "forward_origin", None)
-                        if origin:
-                            orig_id = getattr(origin, "message_id", None)
+                        if not fm:
+                            continue
 
-                        if orig_id and orig_id in meta:
-                            fname, fsize, fdur = meta[orig_id]
-                        else:
-                            fname = (getattr(fm, "file_name", None) or f"file_{fwd.id}") if fm else f"file_{fwd.id}"
-                            fsize = (getattr(fm, "file_size", 0) or 0) if fm else 0
-                            fdur  = (getattr(fm, "duration", 0) if fm and hasattr(fm, "duration") else 0)
+                        fname = getattr(fm, "file_name", None) or f"file_{fwd.id}"
+                        fsize = getattr(fm, "file_size", 0) or 0
+                        fdur  = getattr(fm, "duration", 0) if hasattr(fm, "duration") else 0
 
                         DRIVE_DATA.new_file(destination_folder, fname, fwd.id, fsize, fdur)
                         imported_count += 1
-                    break
+
+                    break  # success — next batch
 
                 except Exception as e:
                     err = str(e)
@@ -839,6 +762,14 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         try: wait = min(int(err.split("_")[-1]), 35)
                         except Exception: pass
                         logger.warning(f"Forward flood wait {wait}s on batch {batch_num+1}")
+                        try:
+                            await status_msg.edit_text(
+                                f"\u23f3 **Flood wait {wait}s — paused**\n\n"
+                                f"**Imported so far:** {imported_count:,}\n"
+                                f"**Batch:** {batch_num+1}/{total_batches}\n"
+                                f"Resuming automatically..."
+                            )
+                        except Exception: pass
                         await asyncio.sleep(wait)
                     elif attempt < 4:
                         await asyncio.sleep(2 ** attempt)
@@ -846,33 +777,32 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         logger.error(f"Batch {batch_num+1} permanently failed: {e}")
                         error_count += len(batch_ids)
 
-            pct = int((batch_num + 1) / total_fwd_batches * 100)
+            # Update progress every batch
+            pct = int((batch_num + 1) / total_batches * 100)
+            elapsed = int((batch_num + 1) * INTER_DELAY)
+            remaining = int((total_batches - batch_num - 1) * INTER_DELAY)
             try:
                 await status_msg.edit_text(
-                    f"\U0001f4ca **Importing: {pct}%**\n\n"
-                    f"**Imported:** {imported_count:,}/{total_media:,}\n"
-                    f"**Batch:** {batch_num+1}/{total_fwd_batches}\n"
-                    f"**Errors:** {error_count:,}\n"
+                    f"\U0001f4ca **Progress: {pct}%**\n\n"
+                    f"**Imported:** {imported_count:,}\n"
+                    f"**Batch:** {batch_num+1}/{total_batches}\n"
+                    f"**Elapsed:** ~{elapsed}s | **Remaining:** ~{remaining}s\n"
                     f"**Method:** \u26a1 Bulk Forward (server-side)"
                 )
             except Exception:
                 pass
 
-            if batch_num < total_fwd_batches - 1:
+            if batch_num < total_batches - 1:
                 await asyncio.sleep(INTER_DELAY)
 
-        success_rate = (imported_count / total_media * 100) if total_media else 0
         await client.send_message(
             user_chat_id,
             f"\u2705 **Bulk Import Completed!**\n\n"
-            f"**Scanned:** {total_range:,} messages\n"
-            f"**Media found:** {total_media:,}\n"
+            f"**Range scanned:** {total_range:,} messages\n"
             f"**Successfully imported:** {imported_count:,}\n"
-            f"**Skipped (no media):** {skipped_count:,}\n"
-            f"**Errors:** {error_count:,}\n\n"
-            f"**Success rate:** {success_rate:.1f}%\n"
+            f"**Errors:** {error_count:,}\n"
             f"**Destination:** {BOT_MODE.current_folder_name}\n\n"
-            f"All files are now available on your TG Drive website! \U0001f389"
+            f"Files are now available on your TG Drive website! \U0001f389"
         )
 
     except Exception as e:
@@ -880,8 +810,7 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
         await client.send_message(
             user_chat_id,
             f"\u274c **Bulk Import Failed**\n\n"
-            f"**Error:** {str(e)}\n\n"
-            f"Please try again or contact support."
+            f"**Error:** {str(e)}\n\nPlease try again."
         )
 
 
