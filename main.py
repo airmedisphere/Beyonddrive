@@ -699,7 +699,12 @@ async def smart_bulk_import(request: Request):
             IMPORT_PROGRESS[import_id]["status"] = "error"
             IMPORT_PROGRESS[import_id]["error_msg"] = str(e)
 
-    asyncio.create_task(_run())
+    _task = asyncio.create_task(_run())
+    # Store reference to prevent GC during asyncio.sleep between batches
+    if not hasattr(app.state, 'import_tasks'):
+        app.state.import_tasks = set()
+    app.state.import_tasks.add(_task)
+    _task.add_done_callback(app.state.import_tasks.discard)
 
     return JSONResponse({"status": "started", "import_id": import_id})
 
