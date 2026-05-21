@@ -658,9 +658,13 @@ async def getFolderShareAuth(request: Request):
 
 @app.post("/api/smartBulkImport")
 async def smart_bulk_import(request: Request):
-    """API endpoint for smart bulk import functionality"""
-    from utils.fast_import import SMART_IMPORT_MANAGER
+    """
+    Start a bulk import as a background task and return an import_id immediately.
+    The client polls /api/getImportProgress to track progress.
+    """
+    from utils.fast_import import SMART_IMPORT_MANAGER, IMPORT_PROGRESS
     from utils.clients import get_client
+    import secrets as _secrets
 
     data = await request.json()
 
@@ -669,32 +673,67 @@ async def smart_bulk_import(request: Request):
 
     logger.info(f"smartBulkImport {data}")
 
-    try:
-        client = get_client()
-        channel_identifier = data["channel"]
-        destination_folder = data["path"]
-        start_msg_id = data.get("start_msg_id")
-        end_msg_id = data.get("end_msg_id")
-        import_mode = data.get("import_mode", "auto")  # auto, fast, regular
+    client = get_client()
+    channel_identifier = data["channel"]
+    destination_folder = data["path"]
+    start_msg_id = data.get("start_msg_id")
+    end_msg_id = data.get("end_msg_id")
+    import_mode = data.get("import_mode", "auto")
+    import_id = _secrets.token_hex(8)
 
-        imported_count, total_files, used_fast_import = await SMART_IMPORT_MANAGER.smart_bulk_import(
-            client, 
-            channel_identifier, 
-            destination_folder, 
-            start_msg_id, 
-            end_msg_id,
-            import_mode
-        )
+    # Fire-and-forget background task
+    async def _run():
+        try:
+            await SMART_IMPORT_MANAGER.smart_bulk_import(
+                client,
+                channel_identifier,
+                destination_folder,
+                start_msg_id,
+                end_msg_id,
+                import_mode,
+                import_id=import_id,
+            )
+        except Exception as e:
+            logger.error(f"Background bulk import error: {e}")
+            IMPORT_PROGRESS[import_id] = IMPORT_PROGRESS.get(import_id, {})
+            IMPORT_PROGRESS[import_id]["status"] = "error"
+            IMPORT_PROGRESS[import_id]["error_msg"] = str(e)
 
-        return JSONResponse({
-            "status": "ok", 
-            "imported": imported_count, 
-            "total": total_files,
-            "method": "fast_import" if used_fast_import else "regular_import"
-        })
-    except Exception as e:
-        logger.error(f"Smart bulk import error: {e}")
-        return JSONResponse({"status": str(e)})
+    asyncio.create_task(_run())
+
+    return JSONResponse({"status": "started", "import_id": import_id})
+
+
+@app.post("/api/getImportProgress")
+async def get_import_progress(request: Request):
+    """Poll progress of a running or completed bulk import."""
+    from utils.fast_import import IMPORT_PROGRESS
+
+    data = await request.json()
+    if data["password"] != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    import_id = data.get("import_id")
+    if not import_id or import_id not in IMPORT_PROGRESS:
+        return JSONResponse({"status": "not found"})
+
+    return JSONResponse({"status": "ok", "data": IMPORT_PROGRESS[import_id]})
+
+
+@app.post("/api/cancelImport")
+async def cancel_import(request: Request):
+    """Cancel a running bulk import."""
+    from utils.fast_import import IMPORT_CANCEL
+
+    data = await request.json()
+    if data["password"] != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    import_id = data.get("import_id")
+    if import_id:
+        IMPORT_CANCEL.add(import_id)
+        return JSONResponse({"status": "ok", "message": "Cancel signal sent"})
+    return JSONResponse({"status": "error", "message": "import_id required"})
 
 
 @app.post("/api/checkChannelAdmin")
