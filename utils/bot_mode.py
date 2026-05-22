@@ -1439,8 +1439,8 @@ async def send_to_handler(client: Client, message: Message):
     FORWARD_BATCH = 100
     INTER_DELAY   = 2.5
 
-    # Get file message IDs — handle both regular and fast-import files
-    msg_ids = [f.id for f in files]
+    # Get Telegram message IDs (f.file_id), not drive IDs (f.id which is a hash string)
+    msg_ids = [f.file_id for f in files]
     source_channel = config.STORAGE_CHANNEL  # default source
 
     # Check if all files are from the same source (fast import case)
