@@ -91,6 +91,21 @@ function showPlayerSelectionModal(filePath) {
                             <span class="player-badge fast">Best for: Slow internet, mobile data</span>
                         </div>
                     </div>
+
+                    <div class="player-option" onclick="openAirPlayer('${filePath}')">
+                        <div class="player-icon" style="background:linear-gradient(135deg,#00d4ff22,#00d4ff44);border:1.5px solid #00d4ff55">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2">
+                                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                                <path d="M2 17l10 5 10-5"/>
+                                <path d="M2 12l10 5 10-5"/>
+                            </svg>
+                        </div>
+                        <div class="player-info">
+                            <h4 style="color:#00d4ff">✈ AirPlayer</h4>
+                            <p>Ultra-fast streaming with dual audio & quality switching</p>
+                            <span class="player-badge" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44">Best for: All connections · Dual Audio · Multi-quality</span>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -219,6 +234,12 @@ function openStandardPlayer(filePath) {
 function openFastPlayer(filePath) {
     const fastPlayerPath = '/fast-player?url=' + getRootUrl() + filePath;
     window.open(fastPlayerPath, '_blank');
+    closePlayerModal();
+}
+
+function openAirPlayer(filePath) {
+    const airPlayerPath = '/air-player?url=' + getRootUrl() + filePath + '&path=' + encodeURIComponent(filePath);
+    window.open(airPlayerPath, '_blank');
     closePlayerModal();
 }
 
