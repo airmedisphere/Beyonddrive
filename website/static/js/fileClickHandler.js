@@ -43,7 +43,7 @@ function openFile() {
 
     // Video files — player selection
     if (fileName.endsWith('.mp4') || fileName.endsWith('.mkv') || fileName.endsWith('.webm') || fileName.endsWith('.mov') || fileName.endsWith('.avi') || fileName.endsWith('.ts') || fileName.endsWith('.ogv') || fileName.endsWith('.m4v') || fileName.endsWith('.flv') || fileName.endsWith('.3gp') || fileName.endsWith('.mpg') || fileName.endsWith('.mpeg')) {
-        showPlayerSelectionModal(path)
+        showPlayerSelectionModal(path, rawPath)
         return
     }
 
@@ -51,7 +51,8 @@ function openFile() {
 }
 
 // Player Selection Modal
-function showPlayerSelectionModal(filePath) {
+function showPlayerSelectionModal(filePath, rawPath) {
+    rawPath = rawPath || filePath.replace('/file?path=', '');
     const modal = document.createElement('div');
     modal.className = 'modal';
     modal.style.zIndex = '1000';
@@ -92,7 +93,7 @@ function showPlayerSelectionModal(filePath) {
                         </div>
                     </div>
 
-                    <div class="player-option" onclick="openAirPlayer('${filePath}')">
+                    <div class="player-option" onclick="openAirPlayer('${filePath}', '${rawPath}')">
                         <div class="player-icon" style="background:linear-gradient(135deg,#00d4ff22,#00d4ff44);border:1.5px solid #00d4ff55">
                             <svg viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2">
                                 <path d="M12 2L2 7l10 5 10-5-10-5z"/>
@@ -237,8 +238,11 @@ function openFastPlayer(filePath) {
     closePlayerModal();
 }
 
-function openAirPlayer(filePath) {
-    const airPlayerPath = '/air-player?url=' + getRootUrl() + filePath + '&path=' + encodeURIComponent(filePath);
+function openAirPlayer(filePath, rawPath) {
+    // filePath = /file?path=/T8RN0O/R2ZU09
+    // rawPath  = /T8RN0O/R2ZU09 (the actual drive path we need)
+    const drivePath = rawPath || filePath.replace('/file?path=', '');
+    const airPlayerPath = '/air-player?url=' + getRootUrl() + filePath + '&path=' + encodeURIComponent(drivePath);
     window.open(airPlayerPath, '_blank');
     closePlayerModal();
 }
