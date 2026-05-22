@@ -475,6 +475,14 @@ async def backup_drive_data(loop=True):
             except Exception as _be:
                 logger.error(f"Backup mirror error: {_be}")
 
+            # Backup drive.data to GitHub (fire-and-forget)
+            try:
+                from utils.github_backup import backup_to_github, is_github_enabled
+                if is_github_enabled():
+                    asyncio.create_task(backup_to_github(str(drive_cache_path)))
+            except Exception as _ge:
+                logger.error(f"GitHub backup error: {_ge}")
+
             if not loop:
                 break
 
