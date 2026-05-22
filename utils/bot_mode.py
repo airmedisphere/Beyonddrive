@@ -17,7 +17,9 @@ logger = Logger(f"{__name__}")
 _BULK_IMPORT_TASKS: set = set()
 
 # File to persist import state across server restarts
-PENDING_IMPORT_FILE = Path("./pending_bulk_import.json")  # persists across Render restarts
+# Telegram message ID where import state is stored (survives deployments)
+# Value is set/cleared at runtime; None means no pending import
+_IMPORT_STATE_MSG_ID: int = None
 
 
 
@@ -693,14 +695,57 @@ def parse_telegram_link(link):
     return None
 
 
+async def _save_import_state(client, state: dict) -> int:
+    """Save import state as a message in STORAGE_CHANNEL. Returns message ID."""
+    global _IMPORT_STATE_MSG_ID
+    text = f"\U0001f4be IMPORT_STATE\n{json.dumps(state)}"
+    try:
+        if _IMPORT_STATE_MSG_ID:
+            await client.edit_message_text(config.STORAGE_CHANNEL, _IMPORT_STATE_MSG_ID, text)
+        else:
+            msg = await client.send_message(config.STORAGE_CHANNEL, text)
+            _IMPORT_STATE_MSG_ID = msg.id
+    except Exception as e:
+        logger.error(f"Failed to save import state: {e}")
+    return _IMPORT_STATE_MSG_ID
+
+
+async def _clear_import_state(client):
+    """Delete the import state message from STORAGE_CHANNEL."""
+    global _IMPORT_STATE_MSG_ID
+    if _IMPORT_STATE_MSG_ID:
+        try:
+            await client.delete_messages(config.STORAGE_CHANNEL, _IMPORT_STATE_MSG_ID)
+        except Exception:
+            pass
+        _IMPORT_STATE_MSG_ID = None
+
+
+async def _load_import_state(client):
+    """
+    Scan recent messages in STORAGE_CHANNEL for a pending import state.
+    Returns (state_dict, msg_id) or (None, None).
+    """
+    global _IMPORT_STATE_MSG_ID
+    try:
+        async for msg in client.get_chat_history(config.STORAGE_CHANNEL, limit=30):
+            if msg.text and msg.text.startswith("\U0001f4be IMPORT_STATE\n"):
+                raw = msg.text[len("\U0001f4be IMPORT_STATE\n"):]
+                state = json.loads(raw)
+                _IMPORT_STATE_MSG_ID = msg.id
+                return state, msg.id
+    except Exception as e:
+        logger.error(f"Failed to load import state: {e}")
+    return None, None
+
+
 async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id, destination_folder, resume_from_batch=0):
     """
     Resumable bulk import using forward_messages (server-side, no re-upload).
-    
-    Saves progress to PENDING_IMPORT_FILE after every batch.
-    On server restart, start_bot_mode() detects the file and resumes automatically.
-    
-    resume_from_batch: which batch index to start from (0 = fresh start)
+
+    State is saved as a message in STORAGE_CHANNEL after every batch.
+    On server restart/deploy, start_bot_mode() finds this message and resumes.
+    This survives Render deployments, restarts, and /tmp wipes.
     """
     global DRIVE_DATA
 
@@ -714,29 +759,27 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
         except Exception as e:
             await client.send_message(user_chat_id,
                 f"\u274c **Error accessing channel**\n\n`{channel_name}`\n\n**Error:** {str(e)}")
-            PENDING_IMPORT_FILE.unlink(missing_ok=True)
+            await _clear_import_state(client)
             return
 
-        all_ids   = list(range(start_id, end_id + 1))
-        batches   = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
+        all_ids       = list(range(start_id, end_id + 1))
+        batches       = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
         total_batches = len(batches)
         total_range   = end_id - start_id + 1
+        is_resume     = resume_from_batch > 0
+        eta_s         = int((total_batches - resume_from_batch) * INTER_DELAY)
 
-        # Save full state to disk so we can resume after a restart
+        # Save initial state to Telegram
         state = {
-            "user_chat_id":    user_chat_id,
-            "channel_name":    channel_name,
-            "start_id":        start_id,
-            "end_id":          end_id,
-            "destination":     destination_folder,
-            "total_batches":   total_batches,
-            "resume_from":     resume_from_batch,
-            "imported_so_far": 0,
+            "user_chat_id":  user_chat_id,
+            "channel_name":  channel_name,
+            "start_id":      start_id,
+            "end_id":        end_id,
+            "destination":   destination_folder,
+            "total_batches": total_batches,
+            "resume_from":   resume_from_batch,
         }
-        PENDING_IMPORT_FILE.write_text(json.dumps(state))
-
-        is_resume = resume_from_batch > 0
-        eta_s = int((total_batches - resume_from_batch) * INTER_DELAY)
+        await _save_import_state(client, state)
 
         status_msg = await client.send_message(
             user_chat_id,
@@ -804,15 +847,13 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         error_count += len(batch_ids)
                         try:
                             await status_msg.edit_text(
-                                f"\u26a0\ufe0f **Batch {batch_num+1} failed**\n"
-                                f"**Error:** {str(e)[:200]}\nContinuing..."
+                                f"\u26a0\ufe0f **Batch {batch_num+1} failed:** {str(e)[:150]}\nContinuing..."
                             )
                         except Exception: pass
 
-            # Save progress after EVERY batch — survive any restart from here
-            state["resume_from"]     = batch_num + 1
-            state["imported_so_far"] = imported_count
-            PENDING_IMPORT_FILE.write_text(json.dumps(state))
+            # Save progress to Telegram after EVERY batch
+            state["resume_from"] = batch_num + 1
+            await _save_import_state(client, state)
 
             pct       = int((batch_num + 1) / total_batches * 100)
             remaining = int((total_batches - batch_num - 1) * INTER_DELAY)
@@ -830,8 +871,8 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
             if batch_num < total_batches - 1:
                 await asyncio.sleep(INTER_DELAY)
 
-        # Done — remove pending file
-        PENDING_IMPORT_FILE.unlink(missing_ok=True)
+        # Done — delete state message
+        await _clear_import_state(client)
 
         await client.send_message(
             user_chat_id,
@@ -846,14 +887,13 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"Bulk import failed: {e}\n{tb}")
-        # Don't delete pending file on crash — allow resume
+        # Keep state message so we can resume on next restart
         try:
             await client.send_message(
                 user_chat_id,
                 f"\u274c **Bulk Import Crashed**\n\n"
                 f"**Error:** {str(e)[:300]}\n\n"
-                f"\U0001f504 **The import will resume automatically on next restart.**\n"
-                f"Or send /bulk_import again to retry manually."
+                f"\U0001f504 **Will resume automatically on next restart.**"
             )
         except Exception:
             pass
@@ -1475,11 +1515,11 @@ async def start_bot_mode(d, b):
     )
     logger.info(message_to_send)
 
-    # Resume any interrupted bulk import from before the restart
-    if PENDING_IMPORT_FILE.exists():
-        try:
-            state = json.loads(PENDING_IMPORT_FILE.read_text())
-            resume_from  = state.get("resume_from", 0)
+    # Resume any interrupted bulk import — state stored in Telegram, survives deploys
+    try:
+        state, state_msg_id = await _load_import_state(main_bot)
+        if state:
+            resume_from   = state.get("resume_from", 0)
             total_batches = state.get("total_batches", 1)
             if resume_from < total_batches:
                 logger.info(f"Resuming interrupted import from batch {resume_from+1}/{total_batches}")
@@ -1497,7 +1537,6 @@ async def start_bot_mode(d, b):
                 _BULK_IMPORT_TASKS.add(_resume_task)
                 _resume_task.add_done_callback(_BULK_IMPORT_TASKS.discard)
             else:
-                PENDING_IMPORT_FILE.unlink(missing_ok=True)
-        except Exception as e:
-            logger.error(f"Failed to resume pending import: {e}")
-            PENDING_IMPORT_FILE.unlink(missing_ok=True)
+                await _clear_import_state(main_bot)
+    except Exception as e:
+        logger.error(f"Failed to check/resume pending import: {e}")
