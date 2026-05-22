@@ -458,69 +458,68 @@
 
         <!-- Main Content Start -->
         <div class="main-content">
-            <div class="header">
-                <div class="search-container">
-                    <div class="search-bar advanced-search">
-                        <div class="search-icon">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="11" cy="11" r="8"/>
-                                <path d="M21 21l-4.35-4.35"/>
-                            </svg>
-                        </div>
-                        <form id="search-form">
-                            <input id="file-search" type="text" placeholder="Search learning materials..." autocomplete="off" />
-                        </form>
-                        <div class="search-suggestions" id="search-suggestions">
-                            <!-- Search suggestions will be populated here -->
-                        </div>
-                    </div>
+            <!-- Row 1: Menu title + search icon -->
+            <div class="topbar">
+                <div class="topbar-left">
+                    <span class="topbar-title">Learning Hub</span>
                 </div>
-                
-                <!-- Sort Controls -->
-                <div class="sort-controls">
-                    <div class="view-toggle">
-                        <button class="view-btn active" id="list-view-btn" title="List View">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <line x1="8" y1="6" x2="21" y2="6"/>
-                                <line x1="8" y1="12" x2="21" y2="12"/>
-                                <line x1="8" y1="18" x2="21" y2="18"/>
-                                <line x1="3" y1="6" x2="3.01" y2="6"/>
-                                <line x1="3" y1="12" x2="3.01" y2="12"/>
-                                <line x1="3" y1="18" x2="3.01" y2="18"/>
-                            </svg>
-                        </button>
-                        <button class="view-btn" id="grid-view-btn" title="Grid View">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <rect x="3" y="3" width="7" height="7"/>
-                                <rect x="14" y="3" width="7" height="7"/>
-                                <rect x="14" y="14" width="7" height="7"/>
-                                <rect x="3" y="14" width="7" height="7"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <select id="sort-by" class="sort-select">
-                        <option value="date">Sort by Date</option>
-                        <option value="name">Sort by Name</option>
-                        <option value="size">Sort by Size</option>
-                    </select>
-                    <button id="sort-order" class="sort-order-btn" data-order="desc" title="Descending">
+                <button class="search-icon-btn" id="search-toggle-btn" title="Search">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <path d="M21 21l-4.35-4.35"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Collapsible search bar -->
+            <div class="search-container collapsed" id="search-container">
+                <div class="search-bar advanced-search">
+                    <div class="search-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M7 14l5-5 5 5z"/>
+                            <circle cx="11" cy="11" r="8"/>
+                            <path d="M21 21l-4.35-4.35"/>
+                        </svg>
+                    </div>
+                    <form id="search-form">
+                        <input id="file-search" type="text" placeholder="Search learning materials..." autocomplete="off" />
+                    </form>
+                    <div class="search-suggestions" id="search-suggestions"></div>
+                </div>
+            </div>
+
+            <!-- Row 2: Stat filter cards -->
+            <div class="stats-container" id="file-count-stats"></div>
+
+            <!-- Row 3: View toggle + Sort + Dark mode -->
+            <div class="toolbar">
+                <div class="view-toggle">
+                    <button class="view-btn active" id="grid-view-btn" title="Grid View">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                            <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+                        </svg>
+                    </button>
+                    <button class="view-btn" id="list-view-btn" title="List View">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+                            <line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>
+                            <line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
                         </svg>
                     </button>
                 </div>
+                <select id="sort-by" class="sort-select">
+                    <option value="date">Sort by Date</option>
+                    <option value="name">Sort by Name</option>
+                    <option value="size">Sort by Size</option>
+                </select>
+                <button id="sort-order" class="sort-order-btn" data-order="desc" title="Descending">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 14l5-5 5 5z"/></svg>
+                </button>
             </div>
 
-            <!-- Breadcrumb Navigation -->
+            <!-- Row 4: Breadcrumb -->
             <div class="breadcrumb-container">
-                <div class="breadcrumb" id="breadcrumb">
-                    <!-- Breadcrumb will be populated here -->
-                </div>
-            </div>
-
-            <!-- File Count Stats -->
-            <div class="stats-container" id="file-count-stats">
-                <!-- File count stats will be populated here -->
+                <div class="breadcrumb" id="breadcrumb"></div>
             </div>
 
             <!-- Bulk Actions -->
