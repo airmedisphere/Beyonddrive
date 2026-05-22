@@ -515,14 +515,19 @@ async def init_drive_data():
     traverse_directory(root_dir)
 
     # Add pending_import attribute for resumable bulk import state
+    changed = False
     if not hasattr(DRIVE_DATA, "pending_import"):
         DRIVE_DATA.pending_import = None
+        changed = True
 
     # Add share_links dict for storing share link data persistently
     if not hasattr(DRIVE_DATA, "share_links"):
         DRIVE_DATA.share_links = {}
+        changed = True
 
-    DRIVE_DATA.save()
+    # Only save if we actually added new attributes
+    if changed:
+        DRIVE_DATA.save()
     logger.info("Drive data initialization completed.")
 
 
