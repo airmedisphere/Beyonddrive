@@ -33,6 +33,8 @@ You can use this bot to upload files to your TG Drive website directly instead o
 /fast_import - Import files directly without copying (requires admin access)
 /stats - Show drive storage statistics
 /search <query> - Search files and folders on the drive
+/send_to @channel - Forward all files from current folder to a channel/group
+/send_file FILE_ID @channel - Forward a single file to a channel/group
 
 📤 **How To Upload Files:** Send a file to this bot and it will be uploaded to your TG Drive website. You can also set a folder for file uploads using /set_folder command.
 
@@ -41,6 +43,8 @@ You can use this bot to upload files to your TG Drive website directly instead o
 📦 **How To Bulk Import:** Use /bulk_import command to import multiple files from a Telegram channel/group by providing a range of message links.
 
 ⚡ **How To Fast Import:** Use /fast_import command to import files directly from channels without copying them. The bot must be admin in the source channel.
+
+📤 **How To Send Files:** Use /send_to @channel to forward all files from your current folder to any channel or group. Use /send_file to send a single file.
 
 Read more about [TG Drive's Bot Mode](https://github.com/TechShreyash/TGDrive#tg-drives-bot-mode)
 """
@@ -1359,6 +1363,225 @@ async def _handle_all_messages(client: Client, message: Message):
             return # CRITICAL: Stop processing this message, it's been handled for 'ask'
         else:
             logger.debug(f"Message from {chat_id} did not match pending ask filter. Allowing other handlers.")
+
+
+@main_bot.on_message(
+    filters.command("send_to")
+    & filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS),
+)
+async def send_to_handler(client: Client, message: Message):
+    """
+    /send_to — Forward all files from a drive folder to a Telegram channel/group.
+
+    Usage:
+      /send_to                     → uses current folder, asks for destination
+      /send_to @channel            → uses current folder, sends to @channel
+      /send_to @channel /FOLDER_PATH → sends specific folder to @channel
+    """
+    global DRIVE_DATA, BOT_MODE
+
+    args = message.text.split()[1:]  # everything after /send_to
+
+    # Parse arguments
+    destination = None
+    folder_path = None
+
+    for arg in args:
+        if arg.startswith("@") or arg.lstrip("-").isdigit():
+            destination = arg
+        elif arg.startswith("/"):
+            folder_path = arg
+
+    # Use current folder if none specified
+    if not folder_path:
+        folder_path = BOT_MODE.current_folder
+        folder_name = BOT_MODE.current_folder_name
+    else:
+        try:
+            folder_data = DRIVE_DATA.get_directory(folder_path)
+            folder_name = getattr(folder_data, "name", folder_path)
+        except Exception:
+            await message.reply_text(f"❌ Folder `{folder_path}` not found.")
+            return
+
+    # Ask for destination if not provided
+    if not destination:
+        try:
+            dest_msg = await manual_ask(
+                client=client,
+                chat_id=message.chat.id,
+                text=(
+                    f"📤 **Send Folder to Channel/Group**\n\n"
+                    f"**Folder:** {folder_name}\n"
+                    f"**Path:** `{folder_path}`\n\n"
+                    f"Send the destination channel username or ID\n"
+                    f"Examples: `@mychannel` or `-1001234567890`"
+                ),
+                timeout=60,
+                filters=filters.text,
+            )
+        except asyncio.TimeoutError:
+            await message.reply_text("⏰ Timeout. Cancelled.")
+            return
+
+        if dest_msg.text.lower() == "/cancel":
+            await message.reply_text("❌ Cancelled.")
+            return
+
+        destination = dest_msg.text.strip()
+
+    # Validate destination
+    try:
+        dest_chat = await client.get_chat(destination)
+        dest_id   = dest_chat.id
+        dest_name = getattr(dest_chat, "title", destination)
+    except Exception as e:
+        await message.reply_text(f"❌ Cannot access `{destination}`\n\n**Error:** {str(e)}")
+        return
+
+    # Get all files from the folder
+    try:
+        folder_data = DRIVE_DATA.get_directory(folder_path)
+        files = [
+            item for item in folder_data.contents.values()
+            if item.type == "file" and not getattr(item, "trash", False)
+        ]
+    except Exception as e:
+        await message.reply_text(f"❌ Error reading folder: {str(e)}")
+        return
+
+    if not files:
+        await message.reply_text(f"⚠️ No files found in **{folder_name}**.")
+        return
+
+    total = len(files)
+    FORWARD_BATCH = 100
+    INTER_DELAY   = 2.5
+
+    # Get file message IDs — handle both regular and fast-import files
+    msg_ids = [f.id for f in files]
+    source_channel = config.STORAGE_CHANNEL  # default source
+
+    # Check if all files are from the same source (fast import case)
+    fast_files = [f for f in files if getattr(f, "is_fast_import", False) and f.source_channel]
+    if len(fast_files) == len(files):
+        # All fast-import from same channel
+        channels = set(f.source_channel for f in fast_files)
+        if len(channels) == 1:
+            source_channel = fast_files[0].source_channel
+
+    batches = [msg_ids[i:i+FORWARD_BATCH] for i in range(0, len(msg_ids), FORWARD_BATCH)]
+    total_batches = len(batches)
+    eta_s = int(total_batches * INTER_DELAY)
+
+    status_msg = await message.reply_text(
+        f"📤 **Sending {total:,} files to {dest_name}**\n\n"
+        f"**Source folder:** {folder_name}\n"
+        f"**Destination:** {dest_name}\n"
+        f"**Batches:** {total_batches} × {FORWARD_BATCH}\n"
+        f"**Est. time:** ~{eta_s}s\n"
+        f"**Method:** ⚡ Bulk Forward (server-side)"
+    )
+
+    sent_count  = 0
+    error_count = 0
+
+    for batch_num, batch_ids in enumerate(batches):
+        for attempt in range(5):
+            try:
+                forwarded = await client.forward_messages(
+                    chat_id=dest_id,
+                    from_chat_id=source_channel,
+                    message_ids=batch_ids,
+                    hide_sender_name=True,
+                    disable_notification=True,
+                )
+                if not isinstance(forwarded, list):
+                    forwarded = [forwarded] if forwarded else []
+                sent_count += len([f for f in forwarded if f])
+                break
+            except Exception as e:
+                err = str(e)
+                if "FLOOD_WAIT" in err:
+                    wait = 35
+                    try: wait = min(int(err.split("_")[-1]), 35)
+                    except Exception: pass
+                    await asyncio.sleep(wait)
+                elif attempt < 4:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    error_count += len(batch_ids)
+                    logger.error(f"send_to batch {batch_num+1} failed: {e}")
+
+        pct = int((batch_num + 1) / total_batches * 100)
+        try:
+            await status_msg.edit_text(
+                f"📤 **Sending: {pct}%**\n\n"
+                f"**Sent:** {sent_count:,}/{total:,}\n"
+                f"**Batch:** {batch_num+1}/{total_batches}\n"
+                f"**Destination:** {dest_name}"
+            )
+        except Exception:
+            pass
+
+        if batch_num < total_batches - 1:
+            await asyncio.sleep(INTER_DELAY)
+
+    await client.send_message(
+        message.chat.id,
+        f"✅ **Send Complete!**\n\n"
+        f"**Folder:** {folder_name}\n"
+        f"**Destination:** {dest_name}\n"
+        f"**Sent:** {sent_count:,}\n"
+        f"**Errors:** {error_count}\n\n"
+        f"All files forwarded to {dest_name}! 🎉"
+    )
+
+
+@main_bot.on_message(
+    filters.command("send_file")
+    & filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS),
+)
+async def send_file_handler(client: Client, message: Message):
+    """
+    /send_file FILE_ID @destination
+    Send a single file from storage to a channel/group.
+    """
+    args = message.text.split()[1:]
+    if len(args) < 2:
+        await message.reply_text(
+            "**Usage:** `/send_file FILE_MESSAGE_ID @destination`\n\n"
+            "Example: `/send_file 12345 @mychannel`"
+        )
+        return
+
+    try:
+        file_msg_id = int(args[0])
+        destination = args[1]
+    except (ValueError, IndexError):
+        await message.reply_text("❌ Invalid arguments. Usage: `/send_file FILE_ID @destination`")
+        return
+
+    try:
+        dest_chat = await client.get_chat(destination)
+    except Exception as e:
+        await message.reply_text(f"❌ Cannot access `{destination}`: {str(e)}")
+        return
+
+    try:
+        await client.forward_messages(
+            chat_id=dest_chat.id,
+            from_chat_id=config.STORAGE_CHANNEL,
+            message_ids=[file_msg_id],
+            hide_sender_name=True,
+            disable_notification=True,
+        )
+        await message.reply_text(f"✅ File sent to **{dest_chat.title or destination}**!")
+    except Exception as e:
+        await message.reply_text(f"❌ Failed to send: {str(e)}")
+
 
 
 async def start_bot_mode(d, b):
