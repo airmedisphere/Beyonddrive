@@ -48,6 +48,14 @@ SLEEP_THRESHOLD = int(os.getenv("SLEEP_THRESHOLD", 60))  # Default to 60 seconds
 WEBSITE_URL = os.getenv("WEBSITE_URL", None)
 
 
+# ── GitHub drive.data Backup ─────────────────────────────────────────────────
+# Optional: auto-commit drive.data to a private GitHub repo on every backup
+# GITHUB_TOKEN = personal access token with 'repo' scope
+# GITHUB_REPO  = username/repo-name  e.g. piyush/beyondbooks-backup
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip() or None
+GITHUB_REPO  = os.getenv("GITHUB_REPO",  "").strip() or None
+
 # ── Backup Bot & Channel ─────────────────────────────────────────────────────
 # Optional: set these to mirror everything to a second bot+channel
 # If main gets deleted, swap MAIN_BOT_TOKEN↔BACKUP_BOT_TOKEN and
