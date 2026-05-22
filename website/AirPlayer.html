@@ -253,8 +253,19 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Sy
 // ── URL params ────────────────────────────────────────────────────────────────
 const params   = new URLSearchParams(location.search);
 const fileUrl  = params.get('url') || '';
-const filePath = params.get('path') || '';
-const fileName = (fileUrl || filePath).split('/').pop()?.split('?')[0] || 'video';
+// path param should be the drive path like /T8RN0O/R2ZU09
+// Extract it properly from either 'path' param or from the url param
+let filePath = params.get('path') || '';
+// If filePath still looks like /file?path=..., extract the real path
+if (filePath.startsWith('/file?path=')) {
+  filePath = filePath.replace('/file?path=', '');
+}
+const fileName = decodeURIComponent((fileUrl || filePath).split('/').pop()?.split('?')[0] || 'video');
+
+// Detect if browser can play this format natively
+const ext = fileName.split('.').pop()?.toLowerCase() || '';
+const BROWSER_PLAYABLE = new Set(['mp4','m4v','webm','ogv','ogg','mov']);
+const NEEDS_TRANSCODE  = !BROWSER_PLAYABLE.has(ext);  // mkv, avi, ts, flv etc.
 
 // ── Resume storage ────────────────────────────────────────────────────────────
 const RK = 'airplayer_resume';
@@ -364,16 +375,28 @@ function getStreamUrl(quality, audioTrack, startTime) {
   if (quality !== 'original' && qualities[quality]?.file_id) {
     return `${getRootUrl()}/file?path=${encodeURIComponent(qualities[quality].file_id)}`;
   }
-  // Use the URL from params directly
+  // For unsupported formats, use transcode endpoint
+  if ((useTranscode || NEEDS_TRANSCODE) && filePath) {
+    return `${getRootUrl()}/api/transcodeStream?path=${encodeURIComponent(filePath)}&start=${Math.floor(startTime||0)}&audio_track=${audioTrack||0}`;
+  }
   if (fileUrl) return fileUrl;
   return `${getRootUrl()}/file?path=${encodeURIComponent(filePath)}`;
 }
 
 // ── Load video ────────────────────────────────────────────────────────────────
 function loadVideo() {
-  const name = decodeURIComponent(fileName).replace(/\.[^.]+$/, '');
+  const name = fileName.replace(/\.[^.]+$/, '');
   vtitle.textContent = name;
   document.title = name + ' — AirPlayer';
+
+  // Handle formats needing transcoding
+  if (NEEDS_TRANSCODE && filePath) {
+    const badge = document.createElement('span');
+    badge.style.cssText = 'font-size:9px;background:rgba(0,212,255,.15);color:#00d4ff;border:1px solid rgba(0,212,255,.3);padding:1px 5px;border-radius:3px;letter-spacing:.5px;margin-left:4px';
+    badge.textContent = '⚡ ' + ext.toUpperCase() + '→MP4';
+    document.getElementById('vmeta').appendChild(badge);
+    useTranscode = true;
+  }
 
   const url = getStreamUrl('original', 0, 0);
   dlBtn.href = url;
@@ -393,9 +416,8 @@ function loadVideo() {
 
 async function probeAudio() {
   try {
-    const path = filePath || new URLSearchParams(new URL(fileUrl).search).get('path') || '';
-    if (!path) return;
-    const resp = await fetch(`${getRootUrl()}/api/getAudioInfo?path=${encodeURIComponent(path)}`);
+    if (!filePath) return;
+    const resp = await fetch(`${getRootUrl()}/api/getAudioInfo?path=${encodeURIComponent(filePath)}`);
     if (!resp.ok) return;
     const data = await resp.json();
     if (data.audio_tracks && data.audio_tracks.length > 1) {
@@ -450,9 +472,8 @@ function skip(s) {
 }
 
 function seekTranscode(t) {
-  const path = filePath || new URLSearchParams(new URL(fileUrl).search).get('path') || '';
-  if (!path) { vid.currentTime = t; return; }
-  const url = `${getRootUrl()}/api/transcodeStream?path=${encodeURIComponent(path)}&start=${Math.floor(t)}&audio_track=${currentAudioTrack}`;
+  if (!filePath) { vid.currentTime = t; return; }
+  const url = `${getRootUrl()}/api/transcodeStream?path=${encodeURIComponent(filePath)}&start=${Math.floor(t)}&audio_track=${currentAudioTrack}`;
   vid.src = url;
   vid.load();
   vid.play().catch(() => {});
@@ -653,6 +674,15 @@ vid.addEventListener('progress', updateProgress);
 
 vid.addEventListener('error', () => {
   spinner.classList.add('hidden');
+  const errCode = vid.error?.code;
+  if (errCode === 4 || NEEDS_TRANSCODE) {
+    errorMsg.innerHTML = `
+      <strong style="color:#ff9900">Format not supported: .${ext.toUpperCase()}</strong><br><br>
+      This browser can't play ${ext.toUpperCase()} files directly.<br>
+      The server needs a <code style="color:#00d4ff">/api/transcodeStream</code> endpoint to convert this file.<br><br>
+      <span style="color:rgba(255,255,255,.4);font-size:11px">Supported formats: MP4, WebM, MOV, M4V</span>
+    `;
+  }
   errorOverlay.classList.remove('hidden');
 });
 
