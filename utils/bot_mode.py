@@ -17,9 +17,7 @@ logger = Logger(f"{__name__}")
 _BULK_IMPORT_TASKS: set = set()
 
 # File to persist import state across server restarts
-# Telegram message ID where import state is stored (survives deployments)
-# Value is set/cleared at runtime; None means no pending import
-_IMPORT_STATE_MSG_ID: int = None
+
 
 
 
@@ -695,57 +693,14 @@ def parse_telegram_link(link):
     return None
 
 
-async def _save_import_state(client, state: dict) -> int:
-    """Save import state as a message in STORAGE_CHANNEL. Returns message ID."""
-    global _IMPORT_STATE_MSG_ID
-    text = f"\U0001f4be IMPORT_STATE\n{json.dumps(state)}"
-    try:
-        if _IMPORT_STATE_MSG_ID:
-            await client.edit_message_text(config.STORAGE_CHANNEL, _IMPORT_STATE_MSG_ID, text)
-        else:
-            msg = await client.send_message(config.STORAGE_CHANNEL, text)
-            _IMPORT_STATE_MSG_ID = msg.id
-    except Exception as e:
-        logger.error(f"Failed to save import state: {e}")
-    return _IMPORT_STATE_MSG_ID
-
-
-async def _clear_import_state(client):
-    """Delete the import state message from STORAGE_CHANNEL."""
-    global _IMPORT_STATE_MSG_ID
-    if _IMPORT_STATE_MSG_ID:
-        try:
-            await client.delete_messages(config.STORAGE_CHANNEL, _IMPORT_STATE_MSG_ID)
-        except Exception:
-            pass
-        _IMPORT_STATE_MSG_ID = None
-
-
-async def _load_import_state(client):
-    """
-    Scan recent messages in STORAGE_CHANNEL for a pending import state.
-    Returns (state_dict, msg_id) or (None, None).
-    """
-    global _IMPORT_STATE_MSG_ID
-    try:
-        async for msg in client.get_chat_history(config.STORAGE_CHANNEL, limit=30):
-            if msg.text and msg.text.startswith("\U0001f4be IMPORT_STATE\n"):
-                raw = msg.text[len("\U0001f4be IMPORT_STATE\n"):]
-                state = json.loads(raw)
-                _IMPORT_STATE_MSG_ID = msg.id
-                return state, msg.id
-    except Exception as e:
-        logger.error(f"Failed to load import state: {e}")
-    return None, None
-
-
 async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id, destination_folder, resume_from_batch=0):
     """
     Resumable bulk import using forward_messages (server-side, no re-upload).
 
-    State is saved as a message in STORAGE_CHANNEL after every batch.
-    On server restart/deploy, start_bot_mode() finds this message and resumes.
-    This survives Render deployments, restarts, and /tmp wipes.
+    State is stored in DRIVE_DATA.pending_import which is serialized into
+    drive.data and backed up to Telegram automatically. This survives
+    Render deployments, restarts, and container wipes — because drive.data
+    is reloaded from Telegram on every startup before this code runs.
     """
     global DRIVE_DATA
 
@@ -759,7 +714,8 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
         except Exception as e:
             await client.send_message(user_chat_id,
                 f"\u274c **Error accessing channel**\n\n`{channel_name}`\n\n**Error:** {str(e)}")
-            await _clear_import_state(client)
+            DRIVE_DATA.pending_import = None
+            DRIVE_DATA.save()
             return
 
         all_ids       = list(range(start_id, end_id + 1))
@@ -769,8 +725,8 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
         is_resume     = resume_from_batch > 0
         eta_s         = int((total_batches - resume_from_batch) * INTER_DELAY)
 
-        # Save initial state to Telegram
-        state = {
+        # Save state into DRIVE_DATA — backed up to Telegram automatically
+        DRIVE_DATA.pending_import = {
             "user_chat_id":  user_chat_id,
             "channel_name":  channel_name,
             "start_id":      start_id,
@@ -779,7 +735,7 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
             "total_batches": total_batches,
             "resume_from":   resume_from_batch,
         }
-        await _save_import_state(client, state)
+        DRIVE_DATA.save()
 
         status_msg = await client.send_message(
             user_chat_id,
@@ -851,9 +807,11 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                             )
                         except Exception: pass
 
-            # Save progress to Telegram after EVERY batch
-            state["resume_from"] = batch_num + 1
-            await _save_import_state(client, state)
+            # Update resume point in DRIVE_DATA after every successful batch
+            # DRIVE_DATA.new_file() already called save() so drive.data is current
+            # Just update the resume_from pointer
+            DRIVE_DATA.pending_import["resume_from"] = batch_num + 1
+            DRIVE_DATA.save()
 
             pct       = int((batch_num + 1) / total_batches * 100)
             remaining = int((total_batches - batch_num - 1) * INTER_DELAY)
@@ -871,8 +829,9 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
             if batch_num < total_batches - 1:
                 await asyncio.sleep(INTER_DELAY)
 
-        # Done — delete state message
-        await _clear_import_state(client)
+        # Done — clear pending state
+        DRIVE_DATA.pending_import = None
+        DRIVE_DATA.save()
 
         await client.send_message(
             user_chat_id,
@@ -887,7 +846,7 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"Bulk import failed: {e}\n{tb}")
-        # Keep state message so we can resume on next restart
+        # Keep pending_import so we resume on next restart
         try:
             await client.send_message(
                 user_chat_id,
@@ -1515,9 +1474,10 @@ async def start_bot_mode(d, b):
     )
     logger.info(message_to_send)
 
-    # Resume any interrupted bulk import — state stored in Telegram, survives deploys
+    # Resume any interrupted bulk import — state lives in DRIVE_DATA which is
+    # already loaded from Telegram backup before this function runs
     try:
-        state, state_msg_id = await _load_import_state(main_bot)
+        state = getattr(DRIVE_DATA, "pending_import", None)
         if state:
             resume_from   = state.get("resume_from", 0)
             total_batches = state.get("total_batches", 1)
@@ -1537,6 +1497,7 @@ async def start_bot_mode(d, b):
                 _BULK_IMPORT_TASKS.add(_resume_task)
                 _resume_task.add_done_callback(_BULK_IMPORT_TASKS.discard)
             else:
-                await _clear_import_state(main_bot)
+                DRIVE_DATA.pending_import = None
+                DRIVE_DATA.save()
     except Exception as e:
         logger.error(f"Failed to check/resume pending import: {e}")

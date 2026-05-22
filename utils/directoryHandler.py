@@ -490,6 +490,11 @@ async def init_drive_data():
                     item.encoded_versions = {}
 
     traverse_directory(root_dir)
+
+    # Add pending_import attribute for resumable bulk import state
+    if not hasattr(DRIVE_DATA, "pending_import"):
+        DRIVE_DATA.pending_import = None
+
     DRIVE_DATA.save()
     logger.info("Drive data initialization completed.")
 
