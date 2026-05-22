@@ -104,7 +104,10 @@ async def mirror_batch(message_ids: list) -> None:
         return
 
     BATCH = 100
-    DELAY = 2.5
+    DELAY = 3.0   # slightly longer than main import to avoid rate limit competition
+
+    # Small initial delay so main operation finishes first
+    await asyncio.sleep(2)
 
     for i in range(0, len(message_ids), BATCH):
         batch = message_ids[i:i+BATCH]

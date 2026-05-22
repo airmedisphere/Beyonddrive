@@ -802,15 +802,6 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         imported_count += 1
 
                     # ONE save for the whole batch — not 99 individual saves
-                    # Mirror batch to backup channel (fire-and-forget)
-                    try:
-                        from utils.backup_manager import mirror_batch
-                        imported_ids = [fwd.id for fwd in forwarded if fwd]
-                        if imported_ids:
-                            asyncio.create_task(mirror_batch(imported_ids))
-                    except Exception as _be:
-                        logger.error(f"Backup mirror error: {_be}")
-
                     DRIVE_DATA.save()
                     break  # success
 
@@ -864,6 +855,21 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
         # Done — clear pending state
         DRIVE_DATA.pending_import = None
         DRIVE_DATA.isUpdated = True
+
+        # Mirror ALL imported files to backup in one go AFTER import completes
+        # This way backup never interferes with main import speed
+        try:
+            from utils.backup_manager import mirror_batch, is_backup_enabled
+            if is_backup_enabled():
+                all_imported_ids = [
+                    item.file_id
+                    for item in DRIVE_DATA.get_directory(destination_folder).contents.values()
+                    if item.type == "file" and not getattr(item, "trash", False)
+                ]
+                if all_imported_ids:
+                    asyncio.create_task(mirror_batch(all_imported_ids))
+        except Exception as _be:
+            logger.error(f"Post-import backup mirror error: {_be}")
 
         await client.send_message(
             user_chat_id,

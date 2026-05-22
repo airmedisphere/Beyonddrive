@@ -228,15 +228,6 @@ class SmartImportManager:
                         DRIVE_DATA.register_file(destination_folder, fname, fwd.id, fsize, fdur)
                         IMPORT_PROGRESS[import_id]["imported"] += 1
 
-                    # Mirror batch to backup channel (fire-and-forget)
-                    try:
-                        from utils.backup_manager import mirror_batch
-                        backed_ids = [fwd.id for fwd in forwarded if fwd]
-                        if backed_ids:
-                            asyncio.create_task(mirror_batch(backed_ids))
-                    except Exception as _be:
-                        logger.error(f"Backup mirror error: {_be}")
-
                     # ONE save for the entire batch — not one per file
                     DRIVE_DATA.save()
 
@@ -367,6 +358,17 @@ class SmartImportManager:
             "elapsed": round(time.time() - IMPORT_PROGRESS[import_id]["start_time"], 1),
         })
         IMPORT_CANCEL.discard(import_id)
+
+        # Mirror ALL files to backup AFTER import completes — no interference
+        try:
+            from utils.backup_manager import mirror_batch, is_backup_enabled
+            if is_backup_enabled() and not use_fast:
+                backed_ids = [row[0] for row in file_list]
+                if backed_ids:
+                    asyncio.create_task(mirror_batch(backed_ids))
+        except Exception as _be:
+            logger.error(f"Post-import backup mirror error: {_be}")
+
         return imported, len(file_list), use_fast
 
 
