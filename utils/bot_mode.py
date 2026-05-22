@@ -715,7 +715,7 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
             await client.send_message(user_chat_id,
                 f"\u274c **Error accessing channel**\n\n`{channel_name}`\n\n**Error:** {str(e)}")
             DRIVE_DATA.pending_import = None
-            DRIVE_DATA.save()
+            DRIVE_DATA.isUpdated = True
             return
 
         all_ids       = list(range(start_id, end_id + 1))
@@ -725,7 +725,8 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
         is_resume     = resume_from_batch > 0
         eta_s         = int((total_batches - resume_from_batch) * INTER_DELAY)
 
-        # Save state into DRIVE_DATA — backed up to Telegram automatically
+        # Store state in DRIVE_DATA — the background backup task will
+        # persist this to Telegram without blocking the import loop
         DRIVE_DATA.pending_import = {
             "user_chat_id":  user_chat_id,
             "channel_name":  channel_name,
@@ -735,7 +736,7 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
             "total_batches": total_batches,
             "resume_from":   resume_from_batch,
         }
-        DRIVE_DATA.save()
+        DRIVE_DATA.isUpdated = True  # signal backup task to save, don't block here
 
         status_msg = await client.send_message(
             user_chat_id,
@@ -807,11 +808,12 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                             )
                         except Exception: pass
 
-            # Update resume point in DRIVE_DATA after every successful batch
-            # DRIVE_DATA.new_file() already called save() so drive.data is current
-            # Just update the resume_from pointer
-            DRIVE_DATA.pending_import["resume_from"] = batch_num + 1
-            DRIVE_DATA.save()
+            # Update resume point in memory only — new_file() already saved
+            # drive.data for each file. Don't call save() again here as it
+            # triggers a slow Telegram upload that blocks the event loop.
+            if DRIVE_DATA.pending_import:
+                DRIVE_DATA.pending_import["resume_from"] = batch_num + 1
+                DRIVE_DATA.isUpdated = True  # background task will persist this
 
             pct       = int((batch_num + 1) / total_batches * 100)
             remaining = int((total_batches - batch_num - 1) * INTER_DELAY)
@@ -831,7 +833,7 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
 
         # Done — clear pending state
         DRIVE_DATA.pending_import = None
-        DRIVE_DATA.save()
+        DRIVE_DATA.isUpdated = True
 
         await client.send_message(
             user_chat_id,
