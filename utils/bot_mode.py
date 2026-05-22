@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import re
@@ -35,6 +36,7 @@ You can use this bot to upload files to your TG Drive website directly instead o
 /search <query> - Search files and folders on the drive
 /send_to @channel - Forward all files from current folder to a channel/group
 /send_file FILE_ID @channel - Forward a single file to a channel/group
+/generate_link - Generate a shareable link for current folder files
 
 📤 **How To Upload Files:** Send a file to this bot and it will be uploaded to your TG Drive website. You can also set a folder for file uploads using /set_folder command.
 
@@ -100,13 +102,27 @@ async def manual_ask(client: Client, chat_id: int, text: str, timeout: int = 60,
 
 @main_bot.on_message(
     filters.command(["start", "help"])
-    & filters.private
-    & filters.user(config.TELEGRAM_ADMIN_IDS),
+    & filters.private,
 )
 async def start_handler(client: Client, message: Message):
     """
-    Handles the /start and /help commands, sending the welcome message.
+    Handles /start and /help.
+    - Plain /start → admin only, show welcome
+    - /start PAYLOAD → anyone, decode share link and ask where to send files
     """
+    parts = message.text.split(None, 1)
+    payload = parts[1].strip() if len(parts) > 1 else None
+
+    # Deep link with payload — open to anyone
+    if payload:
+        await handle_share_link(client, message, payload)
+        return
+
+    # Plain /start — admin only
+    if message.from_user.id not in config.TELEGRAM_ADMIN_IDS:
+        await message.reply_text("👋 Hi! This bot is private.")
+        return
+
     await message.reply_text(START_CMD)
 
 
@@ -1563,6 +1579,295 @@ async def send_file_handler(client: Client, message: Message):
         await message.reply_text(f"❌ Failed to send: {str(e)}")
 
 
+
+
+# ── Share link helpers ────────────────────────────────────────────────────────
+
+def encode_share_payload(source_channel_id: int, start_id: int, end_id: int, title: str = "") -> str:
+    """Encode share link payload as base64 JSON, safe for Telegram deep links."""
+    data = {"c": source_channel_id, "s": start_id, "e": end_id, "t": title[:40]}
+    raw  = json.dumps(data, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def decode_share_payload(payload: str) -> dict:
+    """Decode a share link payload. Returns dict or raises ValueError."""
+    # Restore base64 padding
+    padding = 4 - len(payload) % 4
+    if padding != 4:
+        payload += "=" * padding
+    try:
+        raw  = base64.urlsafe_b64decode(payload).decode()
+        data = json.loads(raw)
+        return data
+    except Exception as e:
+        raise ValueError(f"Invalid share link: {e}")
+
+
+async def handle_share_link(client: Client, message: Message, payload: str):
+    """
+    Called when someone opens the bot via a share link.
+    Decodes the payload, asks where to send, then forwards files.
+    """
+    try:
+        data = decode_share_payload(payload)
+    except ValueError as e:
+        await message.reply_text(f"❌ Invalid share link.\n{e}")
+        return
+
+    source_channel_id = data.get("c")
+    start_id          = data.get("s")
+    end_id            = data.get("e")
+    title             = data.get("t", "Shared Files")
+
+    if not all([source_channel_id, start_id, end_id]):
+        await message.reply_text("❌ Incomplete share link data.")
+        return
+
+    total = end_id - start_id + 1
+
+    # Show options using inline keyboard
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 Send here (this chat)", callback_data=f"share_here|{payload}")],
+        [InlineKeyboardButton("📢 Send to channel/group", callback_data=f"share_channel|{payload}")],
+    ])
+
+    await message.reply_text(
+        f"📦 **Shared Files: {title}**\n\n"
+        f"**Files in range:** ~{total:,}\n\n"
+        f"Where do you want to receive these files?",
+        reply_markup=keyboard
+    )
+
+
+@main_bot.on_callback_query(filters.regex(r"^share_"))
+async def share_link_callback(client: Client, callback_query: CallbackQuery):
+    """Handle share link destination choice."""
+    data   = callback_query.data
+    action, payload = data.split("|", 1)
+    user_id = callback_query.from_user.id
+
+    try:
+        pdata = decode_share_payload(payload)
+    except ValueError:
+        await callback_query.answer("❌ Invalid share link.", show_alert=True)
+        return
+
+    source_channel_id = pdata["c"]
+    start_id          = pdata["s"]
+    end_id            = pdata["e"]
+    title             = pdata.get("t", "Shared Files")
+
+    await callback_query.message.edit_reply_markup(reply_markup=None)
+
+    if action == "share_here":
+        # Send directly to this chat
+        dest_id   = callback_query.message.chat.id
+        dest_name = "this chat"
+        await _do_share_send(client, callback_query.message, source_channel_id,
+                             start_id, end_id, dest_id, dest_name, title)
+
+    elif action == "share_channel":
+        # Ask for channel/group username
+        await callback_query.message.reply_text(
+            "📢 **Send to Channel/Group**\n\n"
+            "Send the channel or group username or ID.\n"
+            "**Note:** The bot must be admin there.\n\n"
+            "Example: `@mychannel` or `-1001234567890`"
+        )
+        # Store pending share for this user
+        _PENDING_SHARES[user_id] = (source_channel_id, start_id, end_id, title, callback_query.message)
+
+    await callback_query.answer()
+
+
+# Pending share destinations keyed by user_id
+_PENDING_SHARES: dict = {}
+
+
+@main_bot.on_message(filters.private & filters.text)
+async def _handle_share_destination(client: Client, message: Message):
+    """Catch channel input for pending share links — only fires if user has a pending share."""
+    user_id = message.from_user.id
+    if user_id not in _PENDING_SHARES:
+        return  # not waiting for share destination — let other handlers process
+
+    source_channel_id, start_id, end_id, title, orig_msg = _PENDING_SHARES.pop(user_id)
+    destination = message.text.strip()
+
+    try:
+        dest_chat = await client.get_chat(destination)
+        dest_id   = dest_chat.id
+        dest_name = getattr(dest_chat, "title", destination)
+    except Exception as e:
+        await message.reply_text(f"❌ Cannot access `{destination}`\n\n**Error:** {str(e)}")
+        return
+
+    await _do_share_send(client, message, source_channel_id,
+                         start_id, end_id, dest_id, dest_name, title)
+
+
+async def _do_share_send(client, status_target, source_channel_id: int,
+                         start_id: int, end_id: int,
+                         dest_id: int, dest_name: str, title: str):
+    """Forward files from source_channel range to dest_id."""
+    FORWARD_BATCH = 100
+    INTER_DELAY   = 2.5
+
+    all_ids       = list(range(start_id, end_id + 1))
+    batches       = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
+    total_batches = len(batches)
+    total         = len(all_ids)
+    eta_s         = int(total_batches * INTER_DELAY)
+
+    status_msg = await status_target.reply_text(
+        f"⚡ **Sending {total:,} files to {dest_name}**\n\n"
+        f"**Title:** {title}\n"
+        f"**Batches:** {total_batches} × {FORWARD_BATCH}\n"
+        f"**Est. time:** ~{eta_s}s\n"
+        f"**Method:** Server-side forward (no re-upload)"
+    )
+
+    sent_count  = 0
+    error_count = 0
+
+    for batch_num, batch_ids in enumerate(batches):
+        for attempt in range(5):
+            try:
+                forwarded = await client.forward_messages(
+                    chat_id=dest_id,
+                    from_chat_id=source_channel_id,
+                    message_ids=batch_ids,
+                    hide_sender_name=True,
+                    disable_notification=True,
+                )
+                if not isinstance(forwarded, list):
+                    forwarded = [forwarded] if forwarded else []
+                sent_count += len([f for f in forwarded if f])
+                break
+            except Exception as e:
+                err = str(e)
+                if "FLOOD_WAIT" in err:
+                    wait = 35
+                    try: wait = min(int(err.split("_")[-1]), 35)
+                    except Exception: pass
+                    await asyncio.sleep(wait)
+                elif "CHAT_SEND_MEDIA_FORBIDDEN" in err or "CHAT_WRITE_FORBIDDEN" in err:
+                    await status_msg.edit_text(
+                        f"❌ **Bot is not admin in {dest_name}**\n\n"
+                        f"Please add the bot as admin to the channel/group first, then try again."
+                    )
+                    return
+                elif attempt < 4:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    error_count += len(batch_ids)
+
+        pct = int((batch_num + 1) / total_batches * 100)
+        try:
+            await status_msg.edit_text(
+                f"📊 **Sending: {pct}%**\n\n"
+                f"**Sent:** {sent_count:,}\n"
+                f"**Batch:** {batch_num+1}/{total_batches}\n"
+                f"**Destination:** {dest_name}"
+            )
+        except Exception:
+            pass
+
+        if batch_num < total_batches - 1:
+            await asyncio.sleep(INTER_DELAY)
+
+    await status_msg.edit_text(
+        f"✅ **Done!**\n\n"
+        f"**Title:** {title}\n"
+        f"**Destination:** {dest_name}\n"
+        f"**Sent:** {sent_count:,}\n"
+        f"**Errors:** {error_count}"
+    )
+
+
+@main_bot.on_message(
+    filters.command("generate_link")
+    & filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS),
+)
+async def generate_link_handler(client: Client, message: Message):
+    """
+    /generate_link — Generate a shareable link for files in current folder.
+
+    Usage:
+      /generate_link                    → generates link for current folder
+      /generate_link t.me/CHANNEL/3 t.me/CHANNEL/529  → custom range
+    """
+    global DRIVE_DATA, BOT_MODE
+
+    parts = message.text.split()[1:]
+
+    source_channel_id = None
+    start_id          = None
+    end_id            = None
+    title             = BOT_MODE.current_folder_name
+
+    if len(parts) >= 2:
+        # Custom range from two t.me links
+        link1 = parse_telegram_link(parts[0])
+        link2 = parse_telegram_link(parts[1])
+        if not link1 or not link2:
+            await message.reply_text(
+                "❌ Invalid links. Use format:\n"
+                "`/generate_link https://t.me/CHANNEL/3 https://t.me/CHANNEL/529`"
+            )
+            return
+        if link1["channel"] != link2["channel"]:
+            await message.reply_text("❌ Both links must be from the same channel.")
+            return
+        try:
+            ch = await client.get_chat(link1["channel"])
+            source_channel_id = ch.id
+        except Exception as e:
+            await message.reply_text(f"❌ Cannot access channel: {e}")
+            return
+        start_id = min(link1["message_id"], link2["message_id"])
+        end_id   = max(link1["message_id"], link2["message_id"])
+        title    = getattr(ch, "title", link1["channel"])
+
+    else:
+        # Use current folder — find the source channel and ID range
+        folder_path = BOT_MODE.current_folder
+        try:
+            folder_data = DRIVE_DATA.get_directory(folder_path)
+            files = [
+                item for item in folder_data.contents.values()
+                if item.type == "file" and not getattr(item, "trash", False)
+            ]
+        except Exception as e:
+            await message.reply_text(f"❌ Error reading folder: {e}")
+            return
+
+        if not files:
+            await message.reply_text("⚠️ No files in current folder.")
+            return
+
+        file_ids = [f.file_id for f in files]
+        start_id = min(file_ids)
+        end_id   = max(file_ids)
+        source_channel_id = config.STORAGE_CHANNEL
+
+    # Encode and build link
+    payload  = encode_share_payload(source_channel_id, start_id, end_id, title)
+    bot_info = await client.get_me()
+    bot_username = bot_info.username
+
+    share_url = f"https://t.me/{bot_username}?start={payload}"
+
+    await message.reply_text(
+        f"🔗 **Share Link Generated!**\n\n"
+        f"**Title:** {title}\n"
+        f"**Range:** {start_id:,} → {end_id:,}\n"
+        f"**Files in range:** ~{end_id - start_id + 1:,}\n\n"
+        f"**Share Link:**\n`{share_url}`\n\n"
+        f"Anyone who clicks this link can receive these files in their chat or any channel/group where the bot is admin."
+    )
 
 
 @main_bot.on_message(filters.private & filters.user(config.TELEGRAM_ADMIN_IDS) & filters.text)
