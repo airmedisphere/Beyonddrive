@@ -159,7 +159,7 @@ async def media_streamer(channel: int, message_id: int, file_name: str, request)
     # Check if this is a fast import file that needs source channel
     try:
         file_path = request.query_params.get("path", "")
-        if file_path:
+        if file_path and DRIVE_DATA is not None:
             file_obj = DRIVE_DATA.get_file(file_path)
             if hasattr(file_obj, 'is_fast_import') and file_obj.is_fast_import and file_obj.source_channel:
                 channel = file_obj.source_channel
