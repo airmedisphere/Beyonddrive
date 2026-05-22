@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import re
+import secrets
 import traceback
 from pathlib import Path
 from pyrogram import Client, filters
@@ -1626,10 +1627,14 @@ async def handle_share_link(client: Client, message: Message, payload: str):
 
     total = end_id - start_id + 1
 
-    # Show options using inline keyboard
+    # Store payload with a short token — Telegram callback_data limit is 64 bytes
+    token = secrets.token_hex(4)  # 8 chars — well within limit
+    _PAYLOAD_STORE[token] = payload
+
+    # callback_data = "share_here|abcd1234" = 20 chars max — safe
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 Send here (this chat)", callback_data=f"share_here|{payload}")],
-        [InlineKeyboardButton("📢 Send to channel/group", callback_data=f"share_channel|{payload}")],
+        [InlineKeyboardButton("💬 Send here (this chat)", callback_data=f"share_here|{token}")],
+        [InlineKeyboardButton("📢 Send to channel/group", callback_data=f"share_channel|{token}")],
     ])
 
     await message.reply_text(
@@ -1643,9 +1648,15 @@ async def handle_share_link(client: Client, message: Message, payload: str):
 @main_bot.on_callback_query(filters.regex(r"^share_"))
 async def share_link_callback(client: Client, callback_query: CallbackQuery):
     """Handle share link destination choice."""
-    data   = callback_query.data
-    action, payload = data.split("|", 1)
+    data    = callback_query.data
+    action, token = data.split("|", 1)
     user_id = callback_query.from_user.id
+
+    # Look up full payload from store
+    payload = _PAYLOAD_STORE.get(token)
+    if not payload:
+        await callback_query.answer("❌ Link expired. Please click the share link again.", show_alert=True)
+        return
 
     try:
         pdata = decode_share_payload(payload)
@@ -1661,28 +1672,32 @@ async def share_link_callback(client: Client, callback_query: CallbackQuery):
     await callback_query.message.edit_reply_markup(reply_markup=None)
 
     if action == "share_here":
-        # Send directly to this chat
+        # Remove token from store — one time use per button click
+        _PAYLOAD_STORE.pop(token, None)
         dest_id   = callback_query.message.chat.id
         dest_name = "this chat"
         await _do_share_send(client, callback_query.message, source_channel_id,
                              start_id, end_id, dest_id, dest_name, title)
 
     elif action == "share_channel":
-        # Ask for channel/group username
+        # Keep token in store until user provides destination
         await callback_query.message.reply_text(
             "📢 **Send to Channel/Group**\n\n"
             "Send the channel or group username or ID.\n"
             "**Note:** The bot must be admin there.\n\n"
             "Example: `@mychannel` or `-1001234567890`"
         )
-        # Store pending share for this user
-        _PENDING_SHARES[user_id] = (source_channel_id, start_id, end_id, title, callback_query.message)
+        _PENDING_SHARES[user_id] = (source_channel_id, start_id, end_id, title, callback_query.message, token)
 
     await callback_query.answer()
 
 
 # Pending share destinations keyed by user_id
 _PENDING_SHARES: dict = {}
+
+# Short-lived payload store to keep callback_data under Telegram's 64-byte limit
+# Key: 8-char token, Value: full payload string
+_PAYLOAD_STORE: dict = {}
 
 
 async def _do_share_send(client, status_target, source_channel_id: int,
@@ -1790,15 +1805,16 @@ async def generate_link_handler(client: Client, message: Message):
 async def _generate_link_impl(client, message):
     global DRIVE_DATA, BOT_MODE
 
+    FORWARD_BATCH = 100
+    INTER_DELAY   = 2.5
+
     parts = message.text.split()[1:]
 
-    source_channel_id = None
-    start_id          = None
-    end_id            = None
-    title             = BOT_MODE.current_folder_name
+    bot_info     = await client.get_me()
+    bot_username = bot_info.username
 
+    # ── Case 1: Custom range from two t.me links ──────────────────────────────
     if len(parts) >= 2:
-        # Custom range from two t.me links
         link1 = parse_telegram_link(parts[0])
         link2 = parse_telegram_link(parts[1])
         if not link1 or not link2:
@@ -1816,12 +1832,100 @@ async def _generate_link_impl(client, message):
         except Exception as e:
             await message.reply_text(f"❌ Cannot access channel: {e}")
             return
-        start_id = min(link1["message_id"], link2["message_id"])
-        end_id   = max(link1["message_id"], link2["message_id"])
-        title    = getattr(ch, "title", link1["channel"])
 
+        orig_start = min(link1["message_id"], link2["message_id"])
+        orig_end   = max(link1["message_id"], link2["message_id"])
+        title      = getattr(ch, "title", link1["channel"])
+        total_range = orig_end - orig_start + 1
+
+        # Copy files to OUR storage channel so the link works forever
+        status_msg = await message.reply_text(
+            f"⚡ **Copying {total_range:,} messages to your storage...**\n\n"
+            f"**Source:** {title}\n"
+            f"**Range:** {orig_start:,} → {orig_end:,}\n"
+            f"**This makes the link permanent** — works even if source channel is deleted.\n\n"
+            f"Please wait..."
+        )
+
+        all_ids       = list(range(orig_start, orig_end + 1))
+        batches       = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
+        total_batches = len(batches)
+        copied_ids    = []   # message IDs in OUR storage channel
+        error_count   = 0
+
+        for batch_num, batch_ids in enumerate(batches):
+            for attempt in range(5):
+                try:
+                    forwarded = await client.forward_messages(
+                        chat_id=config.STORAGE_CHANNEL,
+                        from_chat_id=source_channel_id,
+                        message_ids=batch_ids,
+                        hide_sender_name=True,
+                        disable_notification=True,
+                    )
+                    if not isinstance(forwarded, list):
+                        forwarded = [forwarded] if forwarded else []
+                    for fwd in forwarded:
+                        if fwd:
+                            fm = fwd.document or fwd.video or fwd.audio or fwd.photo or fwd.sticker
+                            if fm:
+                                fname = getattr(fm, "file_name", None) or f"file_{fwd.id}"
+                                fsize = getattr(fm, "file_size", 0) or 0
+                                fdur  = getattr(fm, "duration", 0) if hasattr(fm, "duration") else 0
+                                DRIVE_DATA.register_file(BOT_MODE.current_folder, fname, fwd.id, fsize, fdur)
+                                copied_ids.append(fwd.id)
+                    break
+                except Exception as e:
+                    err = str(e)
+                    if "FLOOD_WAIT" in err:
+                        wait = 35
+                        try: wait = min(int(err.split("_")[-1]), 35)
+                        except Exception: pass
+                        await asyncio.sleep(wait)
+                    elif attempt < 4:
+                        await asyncio.sleep(2 ** attempt)
+                    else:
+                        error_count += len(batch_ids)
+
+            pct = int((batch_num + 1) / total_batches * 100)
+            try:
+                await status_msg.edit_text(
+                    f"📋 **Copying to storage: {pct}%**\n\n"
+                    f"**Copied:** {len(copied_ids):,}\n"
+                    f"**Batch:** {batch_num+1}/{total_batches}\n"
+                    f"**Errors:** {error_count}"
+                )
+            except Exception:
+                pass
+
+            if batch_num < total_batches - 1:
+                await asyncio.sleep(INTER_DELAY)
+
+        # Save all registered files in one write
+        DRIVE_DATA.save()
+
+        if not copied_ids:
+            await status_msg.edit_text("❌ No files could be copied. Check that the source channel is accessible.")
+            return
+
+        # Link points to OUR storage channel — permanent
+        new_start = min(copied_ids)
+        new_end   = max(copied_ids)
+        payload   = encode_share_payload(config.STORAGE_CHANNEL, new_start, new_end, title)
+        share_url = f"https://t.me/{bot_username}?start={payload}"
+
+        await status_msg.edit_text(
+            f"🔗 **Permanent Share Link Generated!**\n\n"
+            f"**Title:** {title}\n"
+            f"**Files copied:** {len(copied_ids):,} (errors: {error_count})\n"
+            f"**Stored in:** Your storage channel ✅\n"
+            f"**Link works even if source is deleted** ✅\n\n"
+            f"**Share Link:**\n`{share_url}`\n\n"
+            f"Anyone who clicks this link can receive these files."
+        )
+
+    # ── Case 2: Current folder — already in storage, just generate link ───────
     else:
-        # Use current folder — find the source channel and ID range
         folder_path = BOT_MODE.current_folder
         try:
             folder_data = DRIVE_DATA.get_directory(folder_path)
@@ -1837,26 +1941,24 @@ async def _generate_link_impl(client, message):
             await message.reply_text("⚠️ No files in current folder.")
             return
 
+        title    = BOT_MODE.current_folder_name
         file_ids = [f.file_id for f in files]
         start_id = min(file_ids)
         end_id   = max(file_ids)
-        source_channel_id = config.STORAGE_CHANNEL
 
-    # Encode and build link
-    payload  = encode_share_payload(source_channel_id, start_id, end_id, title)
-    bot_info = await client.get_me()
-    bot_username = bot_info.username
+        # Files are already in storage channel — link is permanent by default
+        payload   = encode_share_payload(config.STORAGE_CHANNEL, start_id, end_id, title)
+        share_url = f"https://t.me/{bot_username}?start={payload}"
 
-    share_url = f"https://t.me/{bot_username}?start={payload}"
-
-    await message.reply_text(
-        f"🔗 **Share Link Generated!**\n\n"
-        f"**Title:** {title}\n"
-        f"**Range:** {start_id:,} → {end_id:,}\n"
-        f"**Files in range:** ~{end_id - start_id + 1:,}\n\n"
-        f"**Share Link:**\n`{share_url}`\n\n"
-        f"Anyone who clicks this link can receive these files in their chat or any channel/group where the bot is admin."
-    )
+        await message.reply_text(
+            f"🔗 **Share Link Generated!**\n\n"
+            f"**Title:** {title}\n"
+            f"**Files:** {len(files):,}\n"
+            f"**Stored in:** Your storage channel ✅\n"
+            f"**Link is permanent** ✅\n\n"
+            f"**Share Link:**\n`{share_url}`\n\n"
+            f"Anyone who clicks this link can receive these files."
+        )
 
 
 @main_bot.on_message(filters.private & filters.user(config.TELEGRAM_ADMIN_IDS) & filters.text)
@@ -1872,7 +1974,10 @@ async def _handle_all_messages(client: Client, message: Message):
 
     # Check pending share link destination first (non-admin users waiting for channel input)
     if user_id and user_id in _PENDING_SHARES:
-        source_channel_id, start_id, end_id, title, orig_msg = _PENDING_SHARES.pop(user_id)
+        pending = _PENDING_SHARES.pop(user_id)
+        source_channel_id, start_id, end_id, title, orig_msg = pending[:5]
+        token = pending[5] if len(pending) > 5 else None
+        _PAYLOAD_STORE.pop(token, None)  # clean up token
         destination = message.text.strip()
         try:
             dest_chat = await client.get_chat(destination)
