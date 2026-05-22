@@ -1,7 +1,9 @@
 import asyncio
 import json
+import os
 import re
 import traceback
+from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import config
@@ -13,6 +15,10 @@ logger = Logger(f"{__name__}")
 # Strong references to background import tasks — prevents Python GC from
 # collecting tasks during asyncio.sleep() between forward batches
 _BULK_IMPORT_TASKS: set = set()
+
+# File to persist import state across server restarts
+PENDING_IMPORT_FILE = Path("/tmp/pending_bulk_import.json")
+
 
 
 START_CMD = """🚀 **Welcome To TG Drive's Bot Mode**
@@ -646,16 +652,20 @@ async def bulk_import_handler(client: Client, message: Message):
         f"**Estimated time:** {file_count // 60 + 1} minutes"
     )
 
-    # Run directly with await — most reliable, handler coroutine stays alive
-    # for the full import duration. No GC risk, no task cancellation.
-    await bulk_import_files(
-        client,
-        message.chat.id,
-        start_parsed['channel'],
-        start_id,
-        end_id,
-        BOT_MODE.current_folder
+    # create_task: non-blocking so event loop stays free for HTTP health checks.
+    # State saved to disk after every batch — auto-resumes on server restart.
+    _task = asyncio.create_task(
+        bulk_import_files(
+            client,
+            message.chat.id,
+            start_parsed['channel'],
+            start_id,
+            end_id,
+            BOT_MODE.current_folder,
+        )
     )
+    _BULK_IMPORT_TASKS.add(_task)
+    _task.add_done_callback(_BULK_IMPORT_TASKS.discard)
 
 
 def parse_telegram_link(link):
@@ -683,55 +693,68 @@ def parse_telegram_link(link):
     return None
 
 
-async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id, destination_folder):
+async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id, destination_folder, resume_from_batch=0):
     """
-    Maximum-speed bulk import using forward_messages ONLY.
-
-    KEY INSIGHT: We don't scan at all. forward_messages silently skips
-    messages with no media, so we can forward the entire ID range directly.
-    This eliminates the entire Phase 1 get_messages scan that was causing
-    flood waits and server restarts.
-
-    One forward_messages call = 100 files = ~instant (server-side copy).
+    Resumable bulk import using forward_messages (server-side, no re-upload).
+    
+    Saves progress to PENDING_IMPORT_FILE after every batch.
+    On server restart, start_bot_mode() detects the file and resumes automatically.
+    
+    resume_from_batch: which batch index to start from (0 = fresh start)
     """
     global DRIVE_DATA
 
     FORWARD_BATCH = 100
-    INTER_DELAY   = 2.5   # seconds between batches — prevents flood wait
+    INTER_DELAY   = 2.5
 
     try:
         try:
             channel = await client.get_chat(channel_name)
             channel_id = channel.id
         except Exception as e:
-            await client.send_message(
-                user_chat_id,
-                f"\u274c **Error accessing channel**\n\n"
-                f"Could not access `{channel_name}`.\n\n"
-                f"**Error:** {str(e)}"
-            )
+            await client.send_message(user_chat_id,
+                f"\u274c **Error accessing channel**\n\n`{channel_name}`\n\n**Error:** {str(e)}")
+            PENDING_IMPORT_FILE.unlink(missing_ok=True)
             return
 
-        total_range = end_id - start_id + 1
-        all_ids     = list(range(start_id, end_id + 1))
-        batches     = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
+        all_ids   = list(range(start_id, end_id + 1))
+        batches   = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
         total_batches = len(batches)
-        eta_s = int(total_batches * INTER_DELAY)
+        total_range   = end_id - start_id + 1
+
+        # Save full state to disk so we can resume after a restart
+        state = {
+            "user_chat_id":    user_chat_id,
+            "channel_name":    channel_name,
+            "start_id":        start_id,
+            "end_id":          end_id,
+            "destination":     destination_folder,
+            "total_batches":   total_batches,
+            "resume_from":     resume_from_batch,
+            "imported_so_far": 0,
+        }
+        PENDING_IMPORT_FILE.write_text(json.dumps(state))
+
+        is_resume = resume_from_batch > 0
+        eta_s = int((total_batches - resume_from_batch) * INTER_DELAY)
+
+        status_msg = await client.send_message(
+            user_chat_id,
+            f"{'\U0001f504 **Resuming' if is_resume else '\u26a1 **Starting'} Bulk Forward Import**\n\n"
+            f"**Channel:** {channel_name}\n"
+            f"**Range:** {start_id:,} \u2192 {end_id:,} ({total_range:,} messages)\n"
+            f"**Batches:** {total_batches} \u00d7 {FORWARD_BATCH} IDs\n"
+            f"{'**Resuming from batch:** ' + str(resume_from_batch+1) + chr(10) if is_resume else ''}"
+            f"**Est. remaining:** ~{eta_s}s\n"
+            f"**Method:** Server-side copy (no re-upload)"
+        )
 
         imported_count = 0
         error_count    = 0
 
-        status_msg = await client.send_message(
-            user_chat_id,
-            f"\u26a1 **Starting Bulk Forward Import**\n\n"
-            f"**Channel:** {channel_name}\n"
-            f"**Range:** {start_id:,} \u2192 {end_id:,} ({total_range:,} messages)\n"
-            f"**Batches:** {total_batches} \u00d7 {FORWARD_BATCH} IDs\n"
-            f"**Est. time:** ~{eta_s}s ({eta_s//60}m {eta_s%60}s)\n"
-            f"**Method:** Server-side copy (no scan, no re-upload)"
-        )
+        for batch_num in range(resume_from_batch, total_batches):
+            batch_ids = batches[batch_num]
 
-        for batch_num, batch_ids in enumerate(batches):
             for attempt in range(5):
                 try:
                     forwarded = await client.forward_messages(
@@ -750,15 +773,13 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         fm = fwd.document or fwd.video or fwd.audio or fwd.photo or fwd.sticker
                         if not fm:
                             continue
-
                         fname = getattr(fm, "file_name", None) or f"file_{fwd.id}"
                         fsize = getattr(fm, "file_size", 0) or 0
                         fdur  = getattr(fm, "duration", 0) if hasattr(fm, "duration") else 0
-
                         DRIVE_DATA.new_file(destination_folder, fname, fwd.id, fsize, fdur)
                         imported_count += 1
 
-                    break  # success — next batch
+                    break  # success
 
                 except Exception as e:
                     err = str(e)
@@ -766,12 +787,11 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         wait = 35
                         try: wait = min(int(err.split("_")[-1]), 35)
                         except Exception: pass
-                        logger.warning(f"Forward flood wait {wait}s on batch {batch_num+1}")
+                        logger.warning(f"Flood wait {wait}s on batch {batch_num+1}")
                         try:
                             await status_msg.edit_text(
-                                f"\u23f3 **Flood wait {wait}s — paused**\n\n"
-                                f"**Imported so far:** {imported_count:,}\n"
-                                f"**Batch:** {batch_num+1}/{total_batches}\n"
+                                f"\u23f3 **Flood wait {wait}s**\n\n"
+                                f"**Imported:** {imported_count:,} | **Batch:** {batch_num+1}/{total_batches}\n"
                                 f"Resuming automatically..."
                             )
                         except Exception: pass
@@ -780,27 +800,29 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         await asyncio.sleep(2 ** attempt)
                     else:
                         tb = traceback.format_exc()
-                        logger.error(f"Batch {batch_num+1} permanently failed: {e}\n{tb}")
+                        logger.error(f"Batch {batch_num+1} failed: {e}\n{tb}")
                         error_count += len(batch_ids)
                         try:
                             await status_msg.edit_text(
-                                f"\u26a0\ufe0f **Batch {batch_num+1} failed**\n\n"
-                                f"**Error:** {str(e)[:200]}\n"
-                                f"**Continuing with next batch...**"
+                                f"\u26a0\ufe0f **Batch {batch_num+1} failed**\n"
+                                f"**Error:** {str(e)[:200]}\nContinuing..."
                             )
                         except Exception: pass
 
-            # Update progress every batch
-            pct = int((batch_num + 1) / total_batches * 100)
-            elapsed = int((batch_num + 1) * INTER_DELAY)
+            # Save progress after EVERY batch — survive any restart from here
+            state["resume_from"]     = batch_num + 1
+            state["imported_so_far"] = imported_count
+            PENDING_IMPORT_FILE.write_text(json.dumps(state))
+
+            pct       = int((batch_num + 1) / total_batches * 100)
             remaining = int((total_batches - batch_num - 1) * INTER_DELAY)
             try:
                 await status_msg.edit_text(
                     f"\U0001f4ca **Progress: {pct}%**\n\n"
                     f"**Imported:** {imported_count:,}\n"
                     f"**Batch:** {batch_num+1}/{total_batches}\n"
-                    f"**Elapsed:** ~{elapsed}s | **Remaining:** ~{remaining}s\n"
-                    f"**Method:** \u26a1 Bulk Forward (server-side)"
+                    f"**Remaining:** ~{remaining}s\n"
+                    f"**Method:** \u26a1 Bulk Forward"
                 )
             except Exception:
                 pass
@@ -808,11 +830,14 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
             if batch_num < total_batches - 1:
                 await asyncio.sleep(INTER_DELAY)
 
+        # Done — remove pending file
+        PENDING_IMPORT_FILE.unlink(missing_ok=True)
+
         await client.send_message(
             user_chat_id,
             f"\u2705 **Bulk Import Completed!**\n\n"
-            f"**Range scanned:** {total_range:,} messages\n"
-            f"**Successfully imported:** {imported_count:,}\n"
+            f"**Range:** {total_range:,} messages\n"
+            f"**Imported:** {imported_count:,}\n"
             f"**Errors:** {error_count:,}\n"
             f"**Destination:** {BOT_MODE.current_folder_name}\n\n"
             f"Files are now available on your TG Drive website! \U0001f389"
@@ -821,12 +846,14 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"Bulk import failed: {e}\n{tb}")
+        # Don't delete pending file on crash — allow resume
         try:
             await client.send_message(
                 user_chat_id,
-                f"\u274c **Bulk Import Failed**\n\n"
-                f"**Error:** {str(e)}\n\n"
-                f"**Traceback:**\n```\n{tb[-500:]}\n```"
+                f"\u274c **Bulk Import Crashed**\n\n"
+                f"**Error:** {str(e)[:300]}\n\n"
+                f"\U0001f504 **The import will resume automatically on next restart.**\n"
+                f"Or send /bulk_import again to retry manually."
             )
         except Exception:
             pass
@@ -1447,3 +1474,30 @@ async def start_bot_mode(d, b):
         message_to_send,
     )
     logger.info(message_to_send)
+
+    # Resume any interrupted bulk import from before the restart
+    if PENDING_IMPORT_FILE.exists():
+        try:
+            state = json.loads(PENDING_IMPORT_FILE.read_text())
+            resume_from  = state.get("resume_from", 0)
+            total_batches = state.get("total_batches", 1)
+            if resume_from < total_batches:
+                logger.info(f"Resuming interrupted import from batch {resume_from+1}/{total_batches}")
+                _resume_task = asyncio.create_task(
+                    bulk_import_files(
+                        client=main_bot,
+                        user_chat_id=state["user_chat_id"],
+                        channel_name=state["channel_name"],
+                        start_id=state["start_id"],
+                        end_id=state["end_id"],
+                        destination_folder=state["destination"],
+                        resume_from_batch=resume_from,
+                    )
+                )
+                _BULK_IMPORT_TASKS.add(_resume_task)
+                _resume_task.add_done_callback(_BULK_IMPORT_TASKS.discard)
+            else:
+                PENDING_IMPORT_FILE.unlink(missing_ok=True)
+        except Exception as e:
+            logger.error(f"Failed to resume pending import: {e}")
+            PENDING_IMPORT_FILE.unlink(missing_ok=True)
