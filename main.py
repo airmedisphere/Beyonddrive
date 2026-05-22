@@ -137,6 +137,17 @@ async def lifespan(app: FastAPI):
     # Start token cleanup task
     asyncio.create_task(cleanup_expired_tokens())
 
+    # Start backup bot if configured
+    try:
+        from utils.backup_manager import get_backup_client, is_backup_enabled
+        if is_backup_enabled():
+            asyncio.create_task(get_backup_client())
+            logger.info("Backup bot initializing...")
+        else:
+            logger.info("Backup bot not configured (BACKUP_BOT_TOKEN/BACKUP_CHANNEL not set)")
+    except Exception as e:
+        logger.error(f"Failed to start backup bot: {e}")
+
     yield
 
 

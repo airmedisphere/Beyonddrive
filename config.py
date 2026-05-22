@@ -48,6 +48,21 @@ SLEEP_THRESHOLD = int(os.getenv("SLEEP_THRESHOLD", 60))  # Default to 60 seconds
 WEBSITE_URL = os.getenv("WEBSITE_URL", None)
 
 
+# ── Backup Bot & Channel ─────────────────────────────────────────────────────
+# Optional: set these to mirror everything to a second bot+channel
+# If main gets deleted, swap MAIN_BOT_TOKEN↔BACKUP_BOT_TOKEN and
+# STORAGE_CHANNEL↔BACKUP_CHANNEL and DATABASE_BACKUP_MSG_ID↔BACKUP_DB_MSG_ID
+
+BACKUP_BOT_TOKEN = os.getenv("BACKUP_BOT_TOKEN", "").strip()
+if not BACKUP_BOT_TOKEN:
+    BACKUP_BOT_TOKEN = None
+
+_backup_channel = os.getenv("BACKUP_CHANNEL", "").strip()
+BACKUP_CHANNEL = int(_backup_channel) if _backup_channel else None
+
+_backup_db_msg = os.getenv("BACKUP_DB_MSG_ID", "").strip()
+BACKUP_DB_MSG_ID = int(_backup_db_msg) if _backup_db_msg else None
+
 # For Using TG Drive's Bot Mode
 
 # Main Bot Token for TG Drive's Bot Mode
