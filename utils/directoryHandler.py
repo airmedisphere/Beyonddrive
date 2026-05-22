@@ -116,6 +116,22 @@ class NewDriveData:
 
         self.save()
 
+    def register_file(self, path: str, name: str, file_id: int, size: int, duration: int = 0, encoded_versions: dict = None) -> None:
+        """
+        Add a file to memory WITHOUT saving to disk.
+        Use this for bulk operations — call save() once after all files are added.
+        """
+        file = File(name, file_id, size, path, duration, encoded_versions=encoded_versions)
+        if path == "/":
+            directory_folder: Folder = self.contents[path]
+            directory_folder.contents[file.id] = file
+        else:
+            paths = path.strip("/").split("/")
+            directory_folder: Folder = self.contents["/"]
+            for p in paths:
+                directory_folder = directory_folder.contents[p]
+            directory_folder.contents[file.id] = file
+
     def new_fast_import_file(self, path: str, name: str, file_id: int, size: int, duration: int = 0, source_channel: int = None) -> None:
         """Create a new fast import file that references source channel"""
         logger.info(f"Creating new fast import file '{name}' in path '{path}' from channel {source_channel}.")

@@ -776,9 +776,12 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         fname = getattr(fm, "file_name", None) or f"file_{fwd.id}"
                         fsize = getattr(fm, "file_size", 0) or 0
                         fdur  = getattr(fm, "duration", 0) if hasattr(fm, "duration") else 0
-                        DRIVE_DATA.new_file(destination_folder, fname, fwd.id, fsize, fdur)
+                        # register_file adds to memory WITHOUT saving each time
+                        DRIVE_DATA.register_file(destination_folder, fname, fwd.id, fsize, fdur)
                         imported_count += 1
 
+                    # ONE save for the whole batch — not 99 individual saves
+                    DRIVE_DATA.save()
                     break  # success
 
                 except Exception as e:
@@ -808,12 +811,9 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                             )
                         except Exception: pass
 
-            # Update resume point in memory only — new_file() already saved
-            # drive.data for each file. Don't call save() again here as it
-            # triggers a slow Telegram upload that blocks the event loop.
+            # Update resume point — save() already called above after batch
             if DRIVE_DATA.pending_import:
                 DRIVE_DATA.pending_import["resume_from"] = batch_num + 1
-                DRIVE_DATA.isUpdated = True  # background task will persist this
 
             pct       = int((batch_num + 1) / total_batches * 100)
             remaining = int((total_batches - batch_num - 1) * INTER_DELAY)
