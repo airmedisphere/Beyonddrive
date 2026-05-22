@@ -185,6 +185,10 @@ async def smart_player_page():
 async def fast_player_page():
     return FileResponse("website/FastPlayer.html")
 
+@app.get("/air-player")
+async def air_player_page():
+    return FileResponse("website/AirPlayer.html")
+
 
 @app.get("/pdf-viewer")
 async def pdf_viewer_page():
