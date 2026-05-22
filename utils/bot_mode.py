@@ -1584,16 +1584,15 @@ async def send_file_handler(client: Client, message: Message):
 
 # ── Share link helpers ────────────────────────────────────────────────────────
 
-def encode_share_payload(source_channel_id: int, start_id: int, end_id: int, title: str = "") -> str:
-    """Encode share link payload as base64 JSON, safe for Telegram deep links."""
-    data = {"c": source_channel_id, "s": start_id, "e": end_id, "t": title[:40]}
+def encode_share_payload(key: str) -> str:
+    """Encode share link payload — just a short key pointing to DRIVE_DATA.share_links."""
+    data = {"k": key}
     raw  = json.dumps(data, separators=(",", ":"))
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
 def decode_share_payload(payload: str) -> dict:
     """Decode a share link payload. Returns dict or raises ValueError."""
-    # Restore base64 padding
     padding = 4 - len(payload) % 4
     if padding != 4:
         payload += "=" * padding
@@ -1605,10 +1604,31 @@ def decode_share_payload(payload: str) -> dict:
         raise ValueError(f"Invalid share link: {e}")
 
 
+def create_share_link_entry(file_ids: list, source_channel: int, title: str) -> str:
+    """Store share data in DRIVE_DATA and return the key."""
+    key = secrets.token_hex(6)  # 12 char unique key
+    if not hasattr(DRIVE_DATA, "share_links") or DRIVE_DATA.share_links is None:
+        DRIVE_DATA.share_links = {}
+    DRIVE_DATA.share_links[key] = {
+        "file_ids":       file_ids,
+        "source_channel": source_channel,
+        "title":          title,
+    }
+    DRIVE_DATA.isUpdated = True  # background task will persist this
+    return key
+
+
+def get_share_link_entry(key: str) -> dict:
+    """Retrieve share data from DRIVE_DATA by key. Returns None if not found."""
+    if not hasattr(DRIVE_DATA, "share_links") or not DRIVE_DATA.share_links:
+        return None
+    return DRIVE_DATA.share_links.get(key)
+
+
 async def handle_share_link(client: Client, message: Message, payload: str):
     """
     Called when someone opens the bot via a share link.
-    Decodes the payload, asks where to send, then forwards files.
+    Looks up the key in DRIVE_DATA.share_links, then asks where to send.
     """
     try:
         data = decode_share_payload(payload)
@@ -1616,22 +1636,29 @@ async def handle_share_link(client: Client, message: Message, payload: str):
         await message.reply_text(f"❌ Invalid share link.\n{e}")
         return
 
-    source_channel_id = data.get("c")
-    start_id          = data.get("s")
-    end_id            = data.get("e")
-    title             = data.get("t", "Shared Files")
-
-    if not all([source_channel_id, start_id, end_id]):
-        await message.reply_text("❌ Incomplete share link data.")
+    key = data.get("k")
+    if not key:
+        await message.reply_text("❌ Invalid share link format.")
         return
 
-    total = end_id - start_id + 1
+    entry = get_share_link_entry(key)
+    if not entry:
+        await message.reply_text(
+            "❌ Share link not found or expired.\n\n"
+            "The link may have been generated on a different server instance.\n"
+            "Please ask the sender to generate a new link."
+        )
+        return
 
-    # Store payload with a short token — Telegram callback_data limit is 64 bytes
-    token = secrets.token_hex(4)  # 8 chars — well within limit
-    _PAYLOAD_STORE[token] = payload
+    file_ids      = entry["file_ids"]
+    source_channel = entry["source_channel"]
+    title         = entry.get("title", "Shared Files")
+    total         = len(file_ids)
 
-    # callback_data = "share_here|abcd1234" = 20 chars max — safe
+    # Store key in callback token store — 64 byte limit safe (key is 12 chars)
+    token = secrets.token_hex(4)
+    _PAYLOAD_STORE[token] = key  # token → share key
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("💬 Send here (this chat)", callback_data=f"share_here|{token}")],
         [InlineKeyboardButton("📢 Send to channel/group", callback_data=f"share_channel|{token}")],
@@ -1639,7 +1666,7 @@ async def handle_share_link(client: Client, message: Message, payload: str):
 
     await message.reply_text(
         f"📦 **Shared Files: {title}**\n\n"
-        f"**Files in range:** ~{total:,}\n\n"
+        f"**Total files:** {total:,}\n\n"
         f"Where do you want to receive these files?",
         reply_markup=keyboard
     )
@@ -1652,42 +1679,37 @@ async def share_link_callback(client: Client, callback_query: CallbackQuery):
     action, token = data.split("|", 1)
     user_id = callback_query.from_user.id
 
-    # Look up full payload from store
-    payload = _PAYLOAD_STORE.get(token)
-    if not payload:
+    # Look up share key from token store
+    share_key = _PAYLOAD_STORE.get(token)
+    if not share_key:
         await callback_query.answer("❌ Link expired. Please click the share link again.", show_alert=True)
         return
 
-    try:
-        pdata = decode_share_payload(payload)
-    except ValueError:
-        await callback_query.answer("❌ Invalid share link.", show_alert=True)
+    entry = get_share_link_entry(share_key)
+    if not entry:
+        await callback_query.answer("❌ Share link data not found. Please generate a new link.", show_alert=True)
         return
 
-    source_channel_id = pdata["c"]
-    start_id          = pdata["s"]
-    end_id            = pdata["e"]
-    title             = pdata.get("t", "Shared Files")
+    file_ids       = entry["file_ids"]
+    source_channel = entry["source_channel"]
+    title          = entry.get("title", "Shared Files")
 
     await callback_query.message.edit_reply_markup(reply_markup=None)
 
     if action == "share_here":
-        # Remove token from store — one time use per button click
         _PAYLOAD_STORE.pop(token, None)
         dest_id   = callback_query.message.chat.id
         dest_name = "this chat"
-        await _do_share_send(client, callback_query.message, source_channel_id,
-                             start_id, end_id, dest_id, dest_name, title)
+        await _do_share_send(client, callback_query.message, file_ids, source_channel, dest_id, dest_name, title)
 
     elif action == "share_channel":
-        # Keep token in store until user provides destination
         await callback_query.message.reply_text(
             "📢 **Send to Channel/Group**\n\n"
             "Send the channel or group username or ID.\n"
             "**Note:** The bot must be admin there.\n\n"
             "Example: `@mychannel` or `-1001234567890`"
         )
-        _PENDING_SHARES[user_id] = (source_channel_id, start_id, end_id, title, callback_query.message, token)
+        _PENDING_SHARES[user_id] = (file_ids, source_channel, title, callback_query.message, token)
 
     await callback_query.answer()
 
@@ -1700,17 +1722,15 @@ _PENDING_SHARES: dict = {}
 _PAYLOAD_STORE: dict = {}
 
 
-async def _do_share_send(client, status_target, source_channel_id: int,
-                         start_id: int, end_id: int,
+async def _do_share_send(client, status_target, file_ids: list, source_channel_id: int,
                          dest_id: int, dest_name: str, title: str):
-    """Forward files from source_channel range to dest_id."""
+    """Forward specific file_ids from source_channel to dest_id."""
     FORWARD_BATCH = 100
     INTER_DELAY   = 2.5
 
-    all_ids       = list(range(start_id, end_id + 1))
-    batches       = [all_ids[i:i+FORWARD_BATCH] for i in range(0, len(all_ids), FORWARD_BATCH)]
+    batches       = [file_ids[i:i+FORWARD_BATCH] for i in range(0, len(file_ids), FORWARD_BATCH)]
     total_batches = len(batches)
-    total         = len(all_ids)
+    total         = len(file_ids)
     eta_s         = int(total_batches * INTER_DELAY)
 
     status_msg = await status_target.reply_text(
@@ -1908,10 +1928,9 @@ async def _generate_link_impl(client, message):
             await status_msg.edit_text("❌ No files could be copied. Check that the source channel is accessible.")
             return
 
-        # Link points to OUR storage channel — permanent
-        new_start = min(copied_ids)
-        new_end   = max(copied_ids)
-        payload   = encode_share_payload(config.STORAGE_CHANNEL, new_start, new_end, title)
+        # Store file_ids in DRIVE_DATA — permanent, survives restarts
+        share_key = create_share_link_entry(copied_ids, config.STORAGE_CHANNEL, title)
+        payload   = encode_share_payload(share_key)
         share_url = f"https://t.me/{bot_username}?start={payload}"
 
         await status_msg.edit_text(
@@ -1924,7 +1943,7 @@ async def _generate_link_impl(client, message):
             f"Anyone who clicks this link can receive these files."
         )
 
-    # ── Case 2: Current folder — already in storage, just generate link ───────
+    # ── Case 2: Current folder — generate link from actual file locations ───────
     else:
         folder_path = BOT_MODE.current_folder
         try:
@@ -1941,13 +1960,46 @@ async def _generate_link_impl(client, message):
             await message.reply_text("⚠️ No files in current folder.")
             return
 
-        title    = BOT_MODE.current_folder_name
-        file_ids = [f.file_id for f in files]
-        start_id = min(file_ids)
-        end_id   = max(file_ids)
+        title = BOT_MODE.current_folder_name
 
-        # Files are already in storage channel — link is permanent by default
-        payload   = encode_share_payload(config.STORAGE_CHANNEL, start_id, end_id, title)
+        # Check if files are fast-import (point to source channel) or regular (storage channel)
+        fast_files = [f for f in files if getattr(f, "is_fast_import", False) and getattr(f, "source_channel", None)]
+        regular_files = [f for f in files if not getattr(f, "is_fast_import", False)]
+
+        if fast_files and not regular_files:
+            # All fast-import — all point to same source channel
+            channels = set(f.source_channel for f in fast_files)
+            if len(channels) == 1:
+                # Single source — link works but depends on that channel staying public
+                src_channel = fast_files[0].source_channel
+                file_ids = [f.file_id for f in fast_files]
+                start_id = min(file_ids)
+                end_id   = max(file_ids)
+                file_ids_list = [f.file_id for f in fast_files]
+                share_key = create_share_link_entry(file_ids_list, src_channel, title)
+                payload   = encode_share_payload(share_key)
+                share_url = f"https://t.me/{bot_username}?start={payload}"
+                await message.reply_text(
+                    f"🔗 **Share Link Generated!**\n\n"
+                    f"**Title:** {title}\n"
+                    f"**Files:** {len(files):,}\n"
+                    f"⚠️ **Fast-import files** — link depends on source channel staying accessible.\n"
+                    f"Use `/generate_link` with message range to make a permanent copy.\n\n"
+                    f"**Share Link:**\n`{share_url}`\n\n"
+                    f"Anyone who clicks this link can receive these files."
+                )
+                return
+            else:
+                await message.reply_text(
+                    "⚠️ Files in this folder point to multiple source channels.\n"
+                    "Please use `/generate_link t.me/CHANNEL/START t.me/CHANNEL/END` for a specific range."
+                )
+                return
+
+        # Regular files — stored in your storage channel, permanent
+        file_ids_list = [f.file_id for f in (regular_files if regular_files else files)]
+        share_key = create_share_link_entry(file_ids_list, config.STORAGE_CHANNEL, title)
+        payload   = encode_share_payload(share_key)
         share_url = f"https://t.me/{bot_username}?start={payload}"
 
         await message.reply_text(
@@ -1972,19 +2024,19 @@ async def _handle_all_messages(client: Client, message: Message):
     chat_id = message.chat.id
     user_id = message.from_user.id if message.from_user else None
 
-    # Check pending share link destination first (non-admin users waiting for channel input)
+    # Check pending share link destination first (anyone waiting for channel input)
     if user_id and user_id in _PENDING_SHARES:
         pending = _PENDING_SHARES.pop(user_id)
-        source_channel_id, start_id, end_id, title, orig_msg = pending[:5]
-        token = pending[5] if len(pending) > 5 else None
+        file_ids, source_channel, title, orig_msg = pending[:4]
+        token = pending[4] if len(pending) > 4 else None
         _PAYLOAD_STORE.pop(token, None)  # clean up token
         destination = message.text.strip()
         try:
             dest_chat = await client.get_chat(destination)
             dest_id   = dest_chat.id
             dest_name = getattr(dest_chat, "title", destination)
-            await _do_share_send(client, message, source_channel_id,
-                                 start_id, end_id, dest_id, dest_name, title)
+            await _do_share_send(client, message, file_ids, source_channel,
+                                 dest_id, dest_name, title)
         except Exception as e:
             await message.reply_text(f"❌ Cannot access `{destination}`\n\n**Error:** {str(e)}")
         return
