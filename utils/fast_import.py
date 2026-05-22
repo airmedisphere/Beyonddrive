@@ -233,7 +233,7 @@ class SmartImportManager:
                         from utils.backup_manager import mirror_batch
                         backed_ids = [fwd.id for fwd in forwarded if fwd]
                         if backed_ids:
-                            asyncio.create_task(mirror_batch(STORAGE_CHANNEL, backed_ids))
+                            asyncio.create_task(mirror_batch(backed_ids))
                     except Exception as _be:
                         logger.error(f"Backup mirror error: {_be}")
 

@@ -154,7 +154,7 @@ async def start_file_uploader(
     try:
         from utils.backup_manager import mirror_file
         import asyncio as _asyncio
-        _asyncio.create_task(mirror_file(STORAGE_CHANNEL, message.id))
+        _asyncio.create_task(mirror_file(message.id))
     except Exception as _be:
         logger.error(f"Backup mirror error: {_be}")
 

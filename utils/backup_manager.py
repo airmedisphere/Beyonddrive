@@ -1,13 +1,18 @@
 """
-backup_manager.py — Mirror everything to a backup bot + channel.
+backup_manager.py — Mirror everything to a backup channel.
 
-When BACKUP_BOT_TOKEN and BACKUP_CHANNEL are set:
-  - Every file uploaded → also forwarded to backup channel
-  - drive.data → also backed up to backup channel
-  - On failover: swap 3 env vars, redeploy, done
+Uses the MAIN BOT to forward files from main storage channel to backup channel.
+The main bot must be admin in BOTH main channel AND backup channel.
 
-Usage:
-  from utils.backup_manager import BACKUP, mirror_file, mirror_drive_data
+The backup bot is only used to update drive.data in the backup channel
+(since DATABASE_BACKUP_MSG_ID belongs to the backup bot's session).
+
+Setup:
+  BACKUP_BOT_TOKEN = token of backup bot (created on second account)
+  BACKUP_CHANNEL   = channel ID owned by second account
+  BACKUP_DB_MSG_ID = message ID in backup channel for drive.data (auto-created if empty)
+
+  Add MAIN BOT as admin to backup channel too.
 """
 
 import asyncio
@@ -16,7 +21,6 @@ import config
 
 logger = Logger(__name__)
 
-# ── Backup bot client (lazy init) ─────────────────────────────────────────────
 _backup_client = None
 
 
@@ -25,7 +29,7 @@ def is_backup_enabled() -> bool:
 
 
 async def get_backup_client():
-    """Lazy-init the backup bot client."""
+    """Lazy-init the backup bot client (used only for drive.data backup)."""
     global _backup_client
     if not is_backup_enabled():
         return None
@@ -39,7 +43,7 @@ async def get_backup_client():
             api_hash=config.API_HASH,
             bot_token=config.BACKUP_BOT_TOKEN,
             sleep_threshold=config.SLEEP_THRESHOLD,
-            no_updates=True,  # backup bot doesn't need to receive updates
+            no_updates=True,
         )
         await _backup_client.start()
         me = await _backup_client.get_me()
@@ -60,43 +64,70 @@ async def stop_backup_client():
         _backup_client = None
 
 
-# ── Mirror a single file message to backup channel ────────────────────────────
-async def mirror_file(main_channel_id: int, message_id: int) -> int | None:
+# ── Mirror a single file using MAIN BOT ──────────────────────────────────────
+async def mirror_file(message_id: int) -> None:
     """
-    Forward a file from main storage channel to backup channel.
-    Returns the backup message ID or None on failure.
+    Forward a file from main storage to backup channel using the MAIN BOT.
+    Main bot must be admin in backup channel.
     """
     if not is_backup_enabled():
-        return None
-
-    client = await get_backup_client()
-    if not client:
-        return None
+        return
 
     try:
-        forwarded = await client.forward_messages(
+        from utils.clients import get_client
+        client = get_client()
+        await client.forward_messages(
             chat_id=config.BACKUP_CHANNEL,
-            from_chat_id=main_channel_id,
+            from_chat_id=config.STORAGE_CHANNEL,
             message_ids=[message_id],
             hide_sender_name=True,
             disable_notification=True,
         )
-        if isinstance(forwarded, list):
-            forwarded = forwarded[0] if forwarded else None
-        if forwarded:
-            logger.info(f"Mirrored msg {message_id} → backup msg {forwarded.id}")
-            return forwarded.id
+        logger.info(f"Mirrored msg {message_id} to backup channel")
     except Exception as e:
-        logger.error(f"Mirror file failed for msg {message_id}: {e}")
-    return None
+        logger.error(f"mirror_file failed for msg {message_id}: {e}")
 
 
-# ── Mirror drive.data to backup channel ──────────────────────────────────────
+# ── Mirror a batch of files using MAIN BOT ────────────────────────────────────
+async def mirror_batch(message_ids: list) -> None:
+    """
+    Forward a batch of files from main storage to backup channel using MAIN BOT.
+    """
+    if not is_backup_enabled():
+        return
+
+    try:
+        from utils.clients import get_client
+        client = get_client()
+    except Exception as e:
+        logger.error(f"mirror_batch: cannot get client: {e}")
+        return
+
+    BATCH = 100
+    DELAY = 2.5
+
+    for i in range(0, len(message_ids), BATCH):
+        batch = message_ids[i:i+BATCH]
+        try:
+            await client.forward_messages(
+                chat_id=config.BACKUP_CHANNEL,
+                from_chat_id=config.STORAGE_CHANNEL,
+                message_ids=batch,
+                hide_sender_name=True,
+                disable_notification=True,
+            )
+            logger.info(f"Backup: mirrored batch {i//BATCH+1} ({len(batch)} files)")
+        except Exception as e:
+            logger.error(f"mirror_batch failed batch {i//BATCH+1}: {e}")
+        if i + BATCH < len(message_ids):
+            await asyncio.sleep(DELAY)
+
+
+# ── Mirror drive.data using BACKUP BOT ───────────────────────────────────────
 async def mirror_drive_data(drive_cache_path: str) -> None:
     """
-    Send/update drive.data in backup channel.
-    Creates the message if BACKUP_DB_MSG_ID is not set,
-    otherwise edits the existing message.
+    Send/update drive.data in backup channel using the BACKUP BOT.
+    Backup bot must be admin in backup channel.
     """
     if not is_backup_enabled():
         return
@@ -109,18 +140,16 @@ async def mirror_drive_data(drive_cache_path: str) -> None:
 
     caption = (
         "🔐 **TG Drive Backup — Secondary Storage**\n\n"
-        "This is the backup drive.data file.\n"
         "Do not delete this message.\n\n"
-        "To switch to this backup:\n"
-        "1. Set MAIN_BOT_TOKEN = BACKUP_BOT_TOKEN\n"
-        "2. Set STORAGE_CHANNEL = BACKUP_CHANNEL\n"
-        "3. Set DATABASE_BACKUP_MSG_ID = this message ID\n"
+        "**To failover to this backup:**\n"
+        "1. MAIN_BOT_TOKEN → BACKUP_BOT_TOKEN value\n"
+        "2. STORAGE_CHANNEL → BACKUP_CHANNEL value\n"
+        "3. DATABASE_BACKUP_MSG_ID → BACKUP_DB_MSG_ID value\n"
         "4. Redeploy"
     )
 
     try:
         if config.BACKUP_DB_MSG_ID:
-            # Edit existing backup message
             media_doc = InputMediaDocument(
                 drive_cache_path,
                 caption=caption,
@@ -131,9 +160,8 @@ async def mirror_drive_data(drive_cache_path: str) -> None:
                 config.BACKUP_DB_MSG_ID,
                 media=media_doc,
             )
-            logger.info("drive.data mirrored to backup channel (edited)")
+            logger.info("drive.data mirrored to backup channel")
         else:
-            # First time — send new message and log the ID
             msg = await client.send_document(
                 config.BACKUP_CHANNEL,
                 drive_cache_path,
@@ -141,51 +169,15 @@ async def mirror_drive_data(drive_cache_path: str) -> None:
                 file_name="drive.data",
                 disable_notification=True,
             )
-            # Save the message ID to config so next time we edit it
             config.BACKUP_DB_MSG_ID = msg.id
             logger.info(
                 f"drive.data sent to backup channel for first time. "
                 f"Message ID: {msg.id} — "
-                f"Add BACKUP_DB_MSG_ID={msg.id} to your env vars."
+                f"Add BACKUP_DB_MSG_ID={msg.id} to your Render env vars."
             )
-            # Also pin it
             try:
                 await client.pin_chat_message(config.BACKUP_CHANNEL, msg.id)
             except Exception:
                 pass
-
     except Exception as e:
         logger.error(f"mirror_drive_data failed: {e}")
-
-
-# ── Mirror a batch of files (for bulk import) ─────────────────────────────────
-async def mirror_batch(main_channel_id: int, message_ids: list) -> None:
-    """
-    Mirror a batch of files to backup channel using forward_messages.
-    Fire-and-forget — errors are logged but don't block main flow.
-    """
-    if not is_backup_enabled():
-        return
-
-    client = await get_backup_client()
-    if not client:
-        return
-
-    BATCH = 100
-    DELAY = 2.5
-
-    for i in range(0, len(message_ids), BATCH):
-        batch = message_ids[i:i+BATCH]
-        try:
-            await client.forward_messages(
-                chat_id=config.BACKUP_CHANNEL,
-                from_chat_id=main_channel_id,
-                message_ids=batch,
-                hide_sender_name=True,
-                disable_notification=True,
-            )
-            logger.info(f"Mirrored batch {i//BATCH + 1}: {len(batch)} files to backup")
-        except Exception as e:
-            logger.error(f"mirror_batch failed for batch {i//BATCH + 1}: {e}")
-        if i + BATCH < len(message_ids):
-            await asyncio.sleep(DELAY)
