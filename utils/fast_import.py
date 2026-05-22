@@ -220,14 +220,16 @@ class SmartImportManager:
                         if not fm:
                             continue  # message had no media, skipped by TG
 
-                        # Always use real metadata from the forwarded message
-                        # (more reliable than matching back to placeholder scan data)
                         fname = getattr(fm, "file_name", None) or f"file_{fwd.id}"
                         fsize = getattr(fm, "file_size", 0) or 0
                         fdur  = getattr(fm, "duration", 0) if hasattr(fm, "duration") else 0
 
-                        DRIVE_DATA.new_file(destination_folder, fname, fwd.id, fsize, fdur)
+                        # register_file: add to memory only, no save() per file
+                        DRIVE_DATA.register_file(destination_folder, fname, fwd.id, fsize, fdur)
                         IMPORT_PROGRESS[import_id]["imported"] += 1
+
+                    # ONE save for the entire batch — not one per file
+                    DRIVE_DATA.save()
 
                     logger.info(
                         f"[Forward] Batch {batch_num+1}/{total_batches} "
