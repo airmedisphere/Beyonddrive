@@ -17,7 +17,7 @@ logger = Logger(f"{__name__}")
 _BULK_IMPORT_TASKS: set = set()
 
 # File to persist import state across server restarts
-PENDING_IMPORT_FILE = Path("/tmp/pending_bulk_import.json")
+PENDING_IMPORT_FILE = Path("./pending_bulk_import.json")  # persists across Render restarts
 
 
 
