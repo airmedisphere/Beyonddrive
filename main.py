@@ -190,6 +190,74 @@ async def air_player_page():
     return FileResponse("website/AirPlayer.html")
 
 
+@app.get("/api/getAudioInfo")
+async def get_audio_info(request: Request):
+    """
+    Probe a file's audio codec and track info.
+    Query params: path=/FOLDER/FILEID
+    Returns: {codec, video_codec, needs_transcode, audio_tracks}
+    """
+    from utils.directoryHandler import DRIVE_DATA
+    from utils.transcoder import get_file_audio_info
+
+    path = request.query_params.get("path", "")
+    if not path:
+        return JSONResponse({"error": "path required"}, status_code=400)
+
+    try:
+        file_obj  = DRIVE_DATA.get_file(path)
+        channel   = getattr(file_obj, "source_channel", None) or STORAGE_CHANNEL
+        msg_id    = file_obj.file_id
+        info      = await get_file_audio_info(channel, msg_id)
+        return JSONResponse(info)
+    except Exception as e:
+        logger.error(f"getAudioInfo error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/transcodeStream")
+async def transcode_stream_endpoint(request: Request):
+    """
+    Real-time FFmpeg transcode stream.
+    Query params:
+      path        = drive file path e.g. /T8RN0O/R2ZU09
+      start       = seek time in seconds (default 0)
+      audio_track = audio stream index (default 0)
+    Returns: fragmented MP4 stream
+    """
+    from utils.directoryHandler import DRIVE_DATA
+    from utils.transcoder import transcode_stream
+    from fastapi.responses import StreamingResponse
+
+    path        = request.query_params.get("path", "")
+    start_sec   = float(request.query_params.get("start", 0))
+    audio_track = int(request.query_params.get("audio_track", 0))
+
+    if not path:
+        return JSONResponse({"error": "path required"}, status_code=400)
+
+    try:
+        file_obj = DRIVE_DATA.get_file(path)
+        channel  = getattr(file_obj, "source_channel", None) or STORAGE_CHANNEL
+        msg_id   = file_obj.file_id
+    except Exception as e:
+        return JSONResponse({"error": f"File not found: {e}"}, status_code=404)
+
+    async def generate():
+        async for chunk in transcode_stream(channel, msg_id, start_sec, audio_track):
+            yield chunk
+
+    return StreamingResponse(
+        generate(),
+        media_type="video/mp4",
+        headers={
+            "Cache-Control":              "no-cache",
+            "X-Content-Type-Options":     "nosniff",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
+
+
 @app.get("/pdf-viewer")
 async def pdf_viewer_page():
     return FileResponse("website/PDFViewer.html")
