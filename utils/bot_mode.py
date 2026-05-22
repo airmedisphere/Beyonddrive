@@ -1685,28 +1685,6 @@ async def share_link_callback(client: Client, callback_query: CallbackQuery):
 _PENDING_SHARES: dict = {}
 
 
-@main_bot.on_message(filters.private & filters.text)
-async def _handle_share_destination(client: Client, message: Message):
-    """Catch channel input for pending share links — only fires if user has a pending share."""
-    user_id = message.from_user.id
-    if user_id not in _PENDING_SHARES:
-        return  # not waiting for share destination — let other handlers process
-
-    source_channel_id, start_id, end_id, title, orig_msg = _PENDING_SHARES.pop(user_id)
-    destination = message.text.strip()
-
-    try:
-        dest_chat = await client.get_chat(destination)
-        dest_id   = dest_chat.id
-        dest_name = getattr(dest_chat, "title", destination)
-    except Exception as e:
-        await message.reply_text(f"❌ Cannot access `{destination}`\n\n**Error:** {str(e)}")
-        return
-
-    await _do_share_send(client, message, source_channel_id,
-                         start_id, end_id, dest_id, dest_name, title)
-
-
 async def _do_share_send(client, status_target, source_channel_id: int,
                          start_id: int, end_id: int,
                          dest_id: int, dest_name: str, title: str):
@@ -1801,6 +1779,17 @@ async def generate_link_handler(client: Client, message: Message):
     """
     global DRIVE_DATA, BOT_MODE
 
+    try:
+        await _generate_link_impl(client, message)
+    except Exception as e:
+        import traceback as _tb
+        logger.error(f"generate_link error: {e}\n{_tb.format_exc()}")
+        await message.reply_text(f"❌ Error: {str(e)}")
+
+
+async def _generate_link_impl(client, message):
+    global DRIVE_DATA, BOT_MODE
+
     parts = message.text.split()[1:]
 
     source_channel_id = None
@@ -1879,6 +1868,22 @@ async def _handle_all_messages(client: Client, message: Message):
     This handler is placed last to give precedence to specific command handlers.
     """
     chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else None
+
+    # Check pending share link destination first (non-admin users waiting for channel input)
+    if user_id and user_id in _PENDING_SHARES:
+        source_channel_id, start_id, end_id, title, orig_msg = _PENDING_SHARES.pop(user_id)
+        destination = message.text.strip()
+        try:
+            dest_chat = await client.get_chat(destination)
+            dest_id   = dest_chat.id
+            dest_name = getattr(dest_chat, "title", destination)
+            await _do_share_send(client, message, source_channel_id,
+                                 start_id, end_id, dest_id, dest_name, title)
+        except Exception as e:
+            await message.reply_text(f"❌ Cannot access `{destination}`\n\n**Error:** {str(e)}")
+        return
+
     if chat_id in _pending_requests:
         queue, event, msg_filters = _pending_requests[chat_id]
 
