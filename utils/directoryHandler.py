@@ -468,6 +468,13 @@ async def backup_drive_data(loop=True):
             except Exception as pin_e:
                 logger.error(f"Error pinning backup message: {pin_e}")
 
+            # Mirror drive.data to backup channel (fire-and-forget)
+            try:
+                from utils.backup_manager import mirror_drive_data
+                asyncio.create_task(mirror_drive_data(str(drive_cache_path)))
+            except Exception as _be:
+                logger.error(f"Backup mirror error: {_be}")
+
             if not loop:
                 break
 
@@ -510,6 +517,10 @@ async def init_drive_data():
     # Add pending_import attribute for resumable bulk import state
     if not hasattr(DRIVE_DATA, "pending_import"):
         DRIVE_DATA.pending_import = None
+
+    # Add share_links dict for storing share link data persistently
+    if not hasattr(DRIVE_DATA, "share_links"):
+        DRIVE_DATA.share_links = {}
 
     DRIVE_DATA.save()
     logger.info("Drive data initialization completed.")

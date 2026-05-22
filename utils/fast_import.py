@@ -228,6 +228,15 @@ class SmartImportManager:
                         DRIVE_DATA.register_file(destination_folder, fname, fwd.id, fsize, fdur)
                         IMPORT_PROGRESS[import_id]["imported"] += 1
 
+                    # Mirror batch to backup channel (fire-and-forget)
+                    try:
+                        from utils.backup_manager import mirror_batch
+                        backed_ids = [fwd.id for fwd in forwarded if fwd]
+                        if backed_ids:
+                            asyncio.create_task(mirror_batch(STORAGE_CHANNEL, backed_ids))
+                    except Exception as _be:
+                        logger.error(f"Backup mirror error: {_be}")
+
                     # ONE save for the entire batch — not one per file
                     DRIVE_DATA.save()
 

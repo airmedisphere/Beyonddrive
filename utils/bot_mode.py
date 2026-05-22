@@ -802,6 +802,15 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                         imported_count += 1
 
                     # ONE save for the whole batch — not 99 individual saves
+                    # Mirror batch to backup channel (fire-and-forget)
+                    try:
+                        from utils.backup_manager import mirror_batch
+                        imported_ids = [fwd.id for fwd in forwarded if fwd]
+                        if imported_ids:
+                            asyncio.create_task(mirror_batch(config.STORAGE_CHANNEL, imported_ids))
+                    except Exception as _be:
+                        logger.error(f"Backup mirror error: {_be}")
+
                     DRIVE_DATA.save()
                     break  # success
 

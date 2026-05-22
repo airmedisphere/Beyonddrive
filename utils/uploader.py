@@ -150,6 +150,14 @@ async def start_file_uploader(
 
     logger.info(f"Uploaded file {file_path} {id}")
 
+    # Mirror file to backup channel (fire-and-forget)
+    try:
+        from utils.backup_manager import mirror_file
+        import asyncio as _asyncio
+        _asyncio.create_task(mirror_file(STORAGE_CHANNEL, message.id))
+    except Exception as _be:
+        logger.error(f"Backup mirror error: {_be}")
+
     # Fire upload_complete webhooks (import lazily to avoid circular deps)
     try:
         from main import fire_webhooks
