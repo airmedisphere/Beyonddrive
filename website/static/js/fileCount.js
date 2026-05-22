@@ -60,7 +60,7 @@ function updateFileCountDisplay(counts) {
 
     const items = [
         { key: 'total',    filter: '',         label: 'All',     num: counts.total,
-          color: '#6366f1', bg: '#eef2ff',
+          color: '#7c3aed', bg: '#f5f3ff',
           svg: `<path d="M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z"/>` },
         { key: 'videos',   filter: 'video',    label: 'Videos',  num: counts.videos,
           color: '#e11d48', bg: '#fff1f2',
