@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import traceback
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import config
@@ -645,21 +646,16 @@ async def bulk_import_handler(client: Client, message: Message):
         f"**Estimated time:** {file_count // 60 + 1} minutes"
     )
 
-    # Start the bulk import task
-    # IMPORTANT: store reference to prevent garbage collection mid-execution
-    _task = asyncio.create_task(
-        bulk_import_files(
-            client, 
-            message.chat.id, 
-            start_parsed['channel'], 
-            start_id, 
-            end_id,
-            BOT_MODE.current_folder
-        )
+    # Run directly with await — most reliable, handler coroutine stays alive
+    # for the full import duration. No GC risk, no task cancellation.
+    await bulk_import_files(
+        client,
+        message.chat.id,
+        start_parsed['channel'],
+        start_id,
+        end_id,
+        BOT_MODE.current_folder
     )
-    # Keep strong reference so GC doesn't kill the task during asyncio.sleep
-    _BULK_IMPORT_TASKS.add(_task)
-    _task.add_done_callback(_BULK_IMPORT_TASKS.discard)
 
 
 def parse_telegram_link(link):
@@ -783,8 +779,16 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
                     elif attempt < 4:
                         await asyncio.sleep(2 ** attempt)
                     else:
-                        logger.error(f"Batch {batch_num+1} permanently failed: {e}")
+                        tb = traceback.format_exc()
+                        logger.error(f"Batch {batch_num+1} permanently failed: {e}\n{tb}")
                         error_count += len(batch_ids)
+                        try:
+                            await status_msg.edit_text(
+                                f"\u26a0\ufe0f **Batch {batch_num+1} failed**\n\n"
+                                f"**Error:** {str(e)[:200]}\n"
+                                f"**Continuing with next batch...**"
+                            )
+                        except Exception: pass
 
             # Update progress every batch
             pct = int((batch_num + 1) / total_batches * 100)
@@ -815,12 +819,17 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
         )
 
     except Exception as e:
-        logger.error(f"Bulk import failed: {e}")
-        await client.send_message(
-            user_chat_id,
-            f"\u274c **Bulk Import Failed**\n\n"
-            f"**Error:** {str(e)}\n\nPlease try again."
-        )
+        tb = traceback.format_exc()
+        logger.error(f"Bulk import failed: {e}\n{tb}")
+        try:
+            await client.send_message(
+                user_chat_id,
+                f"\u274c **Bulk Import Failed**\n\n"
+                f"**Error:** {str(e)}\n\n"
+                f"**Traceback:**\n```\n{tb[-500:]}\n```"
+            )
+        except Exception:
+            pass
 
 
 @main_bot.on_message(
