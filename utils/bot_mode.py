@@ -1345,26 +1345,6 @@ async def file_handler(client: Client, message: Message):
 
 # --- GENERIC MESSAGE HANDLER (Lowest Priority) ---
 # This handler MUST be defined AFTER all specific command and file handlers.
-@main_bot.on_message(filters.private & filters.user(config.TELEGRAM_ADMIN_IDS) & filters.text)
-async def _handle_all_messages(client: Client, message: Message):
-    """
-    This handler listens for all private text messages from authorized users.
-    If a pending 'ask' request exists for this chat, it fulfills it and
-    then explicitly returns to prevent further handler processing for this message.
-    This handler is placed last to give precedence to specific command handlers.
-    """
-    chat_id = message.chat.id
-    if chat_id in _pending_requests:
-        queue, event, msg_filters = _pending_requests[chat_id]
-
-        if msg_filters is None or msg_filters(None, message): 
-            await queue.put(message)
-            event.set() # Signal that a response has been received
-            return # CRITICAL: Stop processing this message, it's been handled for 'ask'
-        else:
-            logger.debug(f"Message from {chat_id} did not match pending ask filter. Allowing other handlers.")
-
-
 @main_bot.on_message(
     filters.command("send_to")
     & filters.private
@@ -1582,6 +1562,27 @@ async def send_file_handler(client: Client, message: Message):
     except Exception as e:
         await message.reply_text(f"❌ Failed to send: {str(e)}")
 
+
+
+
+@main_bot.on_message(filters.private & filters.user(config.TELEGRAM_ADMIN_IDS) & filters.text)
+async def _handle_all_messages(client: Client, message: Message):
+    """
+    This handler listens for all private text messages from authorized users.
+    If a pending 'ask' request exists for this chat, it fulfills it and
+    then explicitly returns to prevent further handler processing for this message.
+    This handler is placed last to give precedence to specific command handlers.
+    """
+    chat_id = message.chat.id
+    if chat_id in _pending_requests:
+        queue, event, msg_filters = _pending_requests[chat_id]
+
+        if msg_filters is None or msg_filters(None, message): 
+            await queue.put(message)
+            event.set() # Signal that a response has been received
+            return # CRITICAL: Stop processing this message, it's been handled for 'ask'
+        else:
+            logger.debug(f"Message from {chat_id} did not match pending ask filter. Allowing other handlers.")
 
 
 async def start_bot_mode(d, b):
