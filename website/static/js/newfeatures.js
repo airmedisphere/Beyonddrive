@@ -22,18 +22,18 @@
     document.addEventListener('DOMContentLoaded', () => {
         initTheme();
 
-        // Inject toggle button into header
-        const sortControls = document.querySelector('.sort-controls');
-        if (sortControls) {
+        // Inject toggle button into toolbar
+        const toolbar = document.querySelector('.toolbar');
+        if (toolbar) {
             const btn = document.createElement('button');
             btn.id = 'theme-toggle-btn';
             btn.className = 'sort-order-btn theme-toggle-btn';
-            btn.style.cssText = 'font-size:1.1rem;min-width:36px;';
+            btn.style.cssText = 'font-size:1rem;min-width:30px;height:30px;';
             btn.addEventListener('click', () => {
                 const current = document.documentElement.getAttribute('data-theme') || 'light';
                 applyTheme(current === 'dark' ? 'light' : 'dark');
             });
-            sortControls.appendChild(btn);
+            toolbar.appendChild(btn);
         }
 
         // Also init immediately so theme applies before DOMContentLoaded renders
@@ -479,33 +479,26 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-        const searchContainer = document.querySelector('.search-container');
-        if (!searchContainer) return;
+        // Search toggle — icon button shows/hides search bar
+        const toggleBtn = document.getElementById('search-toggle-btn');
+        const searchCont = document.getElementById('search-container');
+        const searchInput = document.getElementById('file-search');
 
-        const pills = document.createElement('div');
-        pills.className = 'filter-pills';
-        pills.innerHTML = TYPES.map(t => `
-            <button class="filter-pill${t.value === '' ? ' active' : ''}" data-value="${t.value}">
-                ${t.icon} ${t.label}
-            </button>`).join('');
-
-        searchContainer.after(pills);
-
-        pills.querySelectorAll('.filter-pill').forEach(btn => {
-            btn.addEventListener('click', () => {
-                activeFilter = btn.dataset.value;
-                pills.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                applyFilter();
+        if (toggleBtn && searchCont) {
+            toggleBtn.addEventListener('click', () => {
+                const collapsed = searchCont.classList.toggle('collapsed');
+                if (!collapsed && searchInput) {
+                    setTimeout(() => searchInput.focus(), 50);
+                }
             });
-        });
-
-        // Re-apply filter when directory refreshes
-        const observer = new MutationObserver(() => {
-            if (activeFilter) setTimeout(applyFilter, 50);
-        });
-        const dirData = document.getElementById('directory-data');
-        if (dirData) observer.observe(dirData, { childList: true });
+            // Close on Escape
+            document.addEventListener('keydown', e => {
+                if (e.key === 'Escape' && !searchCont.classList.contains('collapsed')) {
+                    searchCont.classList.add('collapsed');
+                    if (searchInput) searchInput.value = '';
+                }
+            });
+        }
     });
 })();
 
