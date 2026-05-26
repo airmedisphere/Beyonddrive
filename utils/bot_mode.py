@@ -32,6 +32,8 @@ You can use this bot to upload files to your TG Drive website directly instead o
 /current_folder - Check current folder
 /create_folder - Create a new folder in current directory
 /bulk_import - Import files in bulk from Telegram channel/group
+/restricted_import - Import from RESTRICTED channels (uses user session)
+/bulk_delete - Delete a range of files (with preview + confirm)
 /fast_import - Import files directly without copying (requires admin access)
 /stats - Show drive storage statistics
 /search <query> - Search files and folders on the drive
@@ -44,6 +46,10 @@ You can use this bot to upload files to your TG Drive website directly instead o
 📁 **How To Create Folders:** Use /create_folder command to create new folders in your current directory.
 
 📦 **How To Bulk Import:** Use /bulk_import command to import multiple files from a Telegram channel/group by providing a range of message links.
+
+🔒 **How To Restricted Import:** Use /restricted_import for channels where the bot is not admin. Requires a logged-in user session (PREMIUM_ACCOUNTS).
+
+🗑️ **How To Bulk Delete:** Use /bulk_delete and paste a start + end link from your STORAGE channel. You'll see a preview before anything is deleted.
 
 ⚡ **How To Fast Import:** Use /fast_import command to import files directly from channels without copying them. The bot must be admin in the source channel.
 
@@ -2209,3 +2215,336 @@ async def start_bot_mode(d, b):
                 DRIVE_DATA.save()
     except Exception as e:
         logger.error(f"Failed to check/resume pending import: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# /restricted_import — handle restricted-content downloads via the bot
+# ═══════════════════════════════════════════════════════════════════════════════
+@Client.on_message(
+    filters.command("restricted_import")
+    & filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS),
+)
+async def restricted_import_handler(client: Client, message: Message):
+    """Import restricted content via the bot: paste links (multi-line)."""
+    global BOT_MODE
+
+    if message.chat.id in _pending_requests:
+        await message.reply_text(
+            "I'm already waiting for your input. Please respond or /cancel."
+        )
+        return
+
+    if not BOT_MODE.current_folder:
+        await message.reply_text(
+            "❌ **No current folder set.** Use /set_folder first."
+        )
+        return
+
+    await message.reply_text(
+        "🔒 **Restricted Content Import**\n\n"
+        "Send all your Telegram links — one per line.\n"
+        "Each line can be:\n"
+        "  • A single link\n"
+        "  • A range: `link1 - link2`\n"
+        "  • A topic link\n\n"
+        "**Examples:**\n"
+        "`https://t.me/channel/123`\n"
+        "`https://t.me/c/1234567890/100 - https://t.me/c/1234567890/200`\n\n"
+        "Send /cancel anytime."
+    )
+
+    try:
+        links_msg = await manual_ask(
+            client=client,
+            chat_id=message.chat.id,
+            text="📎 **Paste your links now** (one per line):",
+            timeout=600,
+            filters=filters.text,
+        )
+    except asyncio.TimeoutError:
+        await message.reply_text("⏰ Timeout. Use /restricted_import to try again.")
+        return
+
+    if links_msg.text.lower().strip() == "/cancel":
+        await message.reply_text("❌ Cancelled.")
+        return
+
+    links_text = links_msg.text.strip()
+
+    # Parse
+    from utils.restricted_import import (
+        parse_input_lines, RESTRICTED_IMPORT_MANAGER, RESTRICTED_PROGRESS,
+    )
+    from utils.clients import get_client
+    import secrets as _secrets
+
+    try:
+        jobs = parse_input_lines(links_text)
+    except Exception as e:
+        await message.reply_text(f"❌ Could not parse links: {e}")
+        return
+
+    if not jobs:
+        await message.reply_text("❌ No valid links found.")
+        return
+
+    try:
+        user_client = get_client(premium_required=True)
+    except Exception:
+        await message.reply_text(
+            "❌ **No user account configured.**\n\n"
+            "Restricted import needs a logged-in user session that is a member "
+            "of the source channel. Ask the admin to set up `PREMIUM_ACCOUNTS`."
+        )
+        return
+
+    bot_client = client  # current bot uploads to STORAGE_CHANNEL
+    destination_folder = BOT_MODE.current_folder
+    import_id = _secrets.token_hex(8)
+
+    total = sum(end - start + 1 for _, start, end, _ in jobs)
+    status_msg = await message.reply_text(
+        f"🔒 **Restricted Import Started**\n\n"
+        f"📦 Jobs: **{len(jobs)}** | Total messages: **{total}**\n"
+        f"🆔 ID: `{import_id}`\n\n"
+        f"Status updates every 5s..."
+    )
+
+    async def _runner():
+        try:
+            await RESTRICTED_IMPORT_MANAGER.run(
+                user_client, bot_client, jobs, destination_folder, import_id,
+            )
+        except Exception as e:
+            logger.error(f"Bot restricted import error: {e}")
+
+    asyncio.create_task(_runner())
+
+    # Progress poller
+    async def _poll():
+        last_text = ""
+        while True:
+            await asyncio.sleep(5)
+            prog = RESTRICTED_PROGRESS.get(import_id)
+            if not prog:
+                continue
+            status = prog.get("status", "?")
+            txt = (
+                f"🔒 **Restricted Import**\n\n"
+                f"Status: `{status}`\n"
+                f"Job: {prog.get('current_job', 0)}/{prog.get('total_jobs', 0)}\n"
+                f"Imported: **{prog.get('imported', 0)}** | "
+                f"Errors: **{prog.get('errors', 0)}** | "
+                f"Skipped: **{prog.get('skipped', 0)}**\n"
+                f"📄 Current: `{(prog.get('current_file') or '...')[:40]}`"
+            )
+            if txt != last_text:
+                try:
+                    await status_msg.edit_text(txt)
+                    last_text = txt
+                except Exception:
+                    pass
+            if status in ("done", "error", "cancelled"):
+                final = (
+                    f"✅ **Restricted Import Complete**\n\n"
+                    f"Imported: **{prog.get('imported', 0)}**\n"
+                    f"Errors: **{prog.get('errors', 0)}**\n"
+                    f"Skipped: **{prog.get('skipped', 0)}**\n"
+                    f"⏱ {prog.get('elapsed', 0)}s"
+                ) if status == "done" else (
+                    f"⚠️ **Import {status}**\n{prog.get('error_msg', '')}"
+                )
+                try:
+                    await status_msg.edit_text(final)
+                except Exception:
+                    pass
+                break
+
+    asyncio.create_task(_poll())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# /bulk_delete — delete a range of messages from STORAGE_CHANNEL + drive
+# ═══════════════════════════════════════════════════════════════════════════════
+@Client.on_message(
+    filters.command("bulk_delete")
+    & filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS),
+)
+async def bulk_delete_handler(client: Client, message: Message):
+    """Delete a range of files. Two-step: preview, then confirm."""
+    if message.chat.id in _pending_requests:
+        await message.reply_text(
+            "I'm already waiting for your input. Please respond or /cancel."
+        )
+        return
+
+    await message.reply_text(
+        "🗑️ **Bulk Delete by Range**\n\n"
+        "I'll delete a range of files from your STORAGE channel AND your drive.\n\n"
+        "⚠️ **This is permanent.** You'll see a preview first before anything is deleted.\n\n"
+        "Send /cancel anytime."
+    )
+
+    # Step 1: start link
+    try:
+        start_msg = await manual_ask(
+            client=client,
+            chat_id=message.chat.id,
+            text=(
+                "📎 **Step 1/2: Start link**\n\n"
+                "Send the link of the **first message** to delete.\n"
+                "Must be from your STORAGE channel.\n\n"
+                "Format: `https://t.me/c/1234567890/100`"
+            ),
+            timeout=300,
+            filters=filters.text,
+        )
+    except asyncio.TimeoutError:
+        await message.reply_text("⏰ Timeout. Use /bulk_delete to try again.")
+        return
+
+    if start_msg.text.lower().strip() == "/cancel":
+        await message.reply_text("❌ Cancelled.")
+        return
+    start_link = start_msg.text.strip()
+
+    # Step 2: end link
+    try:
+        end_msg = await manual_ask(
+            client=client,
+            chat_id=message.chat.id,
+            text=(
+                "📎 **Step 2/2: End link**\n\n"
+                "Send the link of the **last message** to delete.\n"
+                "Must be from the same channel."
+            ),
+            timeout=300,
+            filters=filters.text,
+        )
+    except asyncio.TimeoutError:
+        await message.reply_text("⏰ Timeout. Use /bulk_delete to try again.")
+        return
+
+    if end_msg.text.lower().strip() == "/cancel":
+        await message.reply_text("❌ Cancelled.")
+        return
+    end_link = end_msg.text.strip()
+
+    # Parse + preview
+    from utils.bulk_delete import (
+        _parse_storage_link, build_preview, DELETE_PREVIEWS,
+        execute_delete, BULK_DELETE_PROGRESS,
+    )
+
+    try:
+        start_id = _parse_storage_link(start_link)
+        end_id = _parse_storage_link(end_link)
+    except Exception as e:
+        await message.reply_text(f"❌ Link parse error: {e}")
+        return
+
+    try:
+        preview = build_preview(start_id, end_id)
+    except Exception as e:
+        await message.reply_text(f"❌ Preview failed: {e}")
+        return
+
+    count = preview["count"]
+    if count == 0:
+        await message.reply_text(
+            f"✅ **No files found** in range {preview['start_id']} → {preview['end_id']}.\n"
+            f"Nothing to delete."
+        )
+        return
+
+    def _human_size(n):
+        units = ["B", "KB", "MB", "GB", "TB"]
+        i = 0
+        while n >= 1024 and i < 4:
+            n /= 1024
+            i += 1
+        return f"{n:.2f} {units[i]}"
+
+    preview_text = (
+        f"⚠️ **Preview: {count} file(s) will be PERMANENTLY deleted**\n\n"
+        f"📍 Range: `{preview['start_id']}` → `{preview['end_id']}` "
+        f"({preview['range_size']} message IDs scanned)\n"
+        f"💾 Total size: **{_human_size(preview['total_size'])}**\n\n"
+        f"**First few files:**\n"
+    )
+    for m in preview["matches"][:8]:
+        preview_text += f"  • `{m['name'][:40]}` ({_human_size(m['size'])})\n"
+    if preview["truncated"] or count > 8:
+        preview_text += f"  ... and {count - min(8, count)} more\n"
+    preview_text += "\nReply **YES** to confirm deletion, anything else to cancel."
+
+    try:
+        confirm_msg = await manual_ask(
+            client=client,
+            chat_id=message.chat.id,
+            text=preview_text,
+            timeout=120,
+            filters=filters.text,
+        )
+    except asyncio.TimeoutError:
+        await message.reply_text("⏰ Timeout. Deletion cancelled.")
+        return
+
+    if confirm_msg.text.strip().upper() != "YES":
+        await message.reply_text("❌ Cancelled. No files were deleted.")
+        return
+
+    # Execute
+    import secrets as _secrets
+    delete_id = _secrets.token_hex(8)
+    preview_token = preview["preview_token"]
+
+    status_msg = await message.reply_text("🗑️ **Deletion started**\nWorking...")
+
+    async def _runner():
+        try:
+            await execute_delete(client, preview_token, delete_id)
+        except Exception as e:
+            logger.error(f"Bot bulk delete error: {e}")
+
+    asyncio.create_task(_runner())
+
+    async def _poll():
+        last_text = ""
+        while True:
+            await asyncio.sleep(3)
+            prog = BULK_DELETE_PROGRESS.get(delete_id)
+            if not prog:
+                continue
+            status = prog.get("status", "?")
+            txt = (
+                f"🗑️ **Bulk Delete**\n\n"
+                f"Status: `{status}`\n"
+                f"Telegram: **{prog.get('telegram_deleted', 0)}** / {prog.get('total', 0)}\n"
+                f"Drive: **{prog.get('drive_deleted', 0)}** / {prog.get('total', 0)}\n"
+                f"Errors: **{prog.get('errors', 0)}**"
+            )
+            if txt != last_text:
+                try:
+                    await status_msg.edit_text(txt)
+                    last_text = txt
+                except Exception:
+                    pass
+            if status in ("done", "error", "cancelled"):
+                final = (
+                    f"✅ **Bulk Delete Complete**\n\n"
+                    f"Telegram deleted: **{prog.get('telegram_deleted', 0)}**\n"
+                    f"Drive removed: **{prog.get('drive_deleted', 0)}**\n"
+                    f"Errors: **{prog.get('errors', 0)}**\n"
+                    f"⏱ {prog.get('elapsed', 0)}s"
+                ) if status == "done" else (
+                    f"⚠️ **Delete {status}**\n{prog.get('error_msg', '')}"
+                )
+                try:
+                    await status_msg.edit_text(final)
+                except Exception:
+                    pass
+                break
+
+    asyncio.create_task(_poll())
