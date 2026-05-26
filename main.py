@@ -1399,3 +1399,208 @@ async def fire_webhooks(event: str, payload: Dict[str, Any]):
 
 from utils.advanced_routes import router as advanced_router
 app.include_router(advanced_router)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RESTRICTED CONTENT IMPORT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/restrictedImport")
+async def restricted_import(request: Request):
+    """
+    Start a restricted-content import as a background task.
+    Frontend polls /api/getRestrictedProgress with the returned id.
+    """
+    from utils.restricted_import import (
+        RESTRICTED_IMPORT_MANAGER, RESTRICTED_PROGRESS, parse_input_lines,
+    )
+    from utils.clients import get_client
+    import secrets as _secrets
+
+    data = await request.json()
+    if data.get("password") != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    logger.info("restrictedImport request")
+
+    links_text = (data.get("links") or "").strip()
+    if not links_text:
+        return JSONResponse({"status": "error", "message": "No links provided"})
+
+    try:
+        jobs = parse_input_lines(links_text)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
+
+    if not jobs:
+        return JSONResponse({"status": "error", "message": "No valid links"})
+
+    # Need a USER client — bot cannot read restricted content
+    try:
+        user_client = get_client(premium_required=True)
+    except Exception:
+        return JSONResponse({
+            "status": "error",
+            "message": "No user account configured. Restricted import requires a "
+                       "logged-in user session that is a member of the source channel."
+        })
+
+    bot_client = get_client()
+    destination_folder = data["path"]
+    import_id = _secrets.token_hex(8)
+
+    async def _run():
+        try:
+            await RESTRICTED_IMPORT_MANAGER.run(
+                user_client, bot_client, jobs, destination_folder, import_id,
+            )
+        except Exception as e:
+            logger.error(f"Background restricted import error: {e}")
+            RESTRICTED_PROGRESS[import_id] = RESTRICTED_PROGRESS.get(import_id, {})
+            RESTRICTED_PROGRESS[import_id]["status"] = "error"
+            RESTRICTED_PROGRESS[import_id]["error_msg"] = str(e)
+
+    task = asyncio.create_task(_run())
+    if not hasattr(app.state, "restricted_tasks"):
+        app.state.restricted_tasks = set()
+    app.state.restricted_tasks.add(task)
+    task.add_done_callback(app.state.restricted_tasks.discard)
+
+    return JSONResponse({
+        "status": "started",
+        "import_id": import_id,
+        "total_jobs": len(jobs),
+    })
+
+
+@app.post("/api/getRestrictedProgress")
+async def get_restricted_progress(request: Request):
+    from utils.restricted_import import RESTRICTED_PROGRESS
+
+    data = await request.json()
+    if data.get("password") != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    import_id = data.get("import_id")
+    if not import_id or import_id not in RESTRICTED_PROGRESS:
+        return JSONResponse({"status": "not found"})
+
+    return JSONResponse({"status": "ok", "data": RESTRICTED_PROGRESS[import_id]})
+
+
+@app.post("/api/cancelRestrictedImport")
+async def cancel_restricted_import(request: Request):
+    from utils.restricted_import import RESTRICTED_CANCEL
+
+    data = await request.json()
+    if data.get("password") != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    import_id = data.get("import_id")
+    if import_id:
+        RESTRICTED_CANCEL.add(import_id)
+        return JSONResponse({"status": "ok", "message": "Cancel signal sent"})
+    return JSONResponse({"status": "error", "message": "import_id required"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BULK DELETE BY RANGE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/previewBulkDelete")
+async def preview_bulk_delete(request: Request):
+    """Step 1: Preview files in a link range. Returns a preview_token."""
+    from utils.bulk_delete import build_preview, _parse_storage_link
+
+    data = await request.json()
+    if data.get("password") != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    start_link = (data.get("start_link") or "").strip()
+    end_link = (data.get("end_link") or "").strip()
+    if not start_link or not end_link:
+        return JSONResponse({"status": "error", "message": "Both start_link and end_link are required"})
+
+    try:
+        start_id = _parse_storage_link(start_link)
+        end_id = _parse_storage_link(end_link)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
+
+    try:
+        preview = build_preview(start_id, end_id)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
+
+    return JSONResponse({"status": "ok", **preview})
+
+
+@app.post("/api/confirmBulkDelete")
+async def confirm_bulk_delete(request: Request):
+    """Step 2: Confirm and start deletion in background."""
+    from utils.bulk_delete import (
+        DELETE_PREVIEWS, BULK_DELETE_PROGRESS, execute_delete,
+    )
+    from utils.clients import get_client
+    import secrets as _secrets
+
+    data = await request.json()
+    if data.get("password") != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    preview_token = data.get("preview_token")
+    if not preview_token or preview_token not in DELETE_PREVIEWS:
+        return JSONResponse({
+            "status": "error",
+            "message": "Preview expired or invalid. Please re-preview.",
+        })
+
+    delete_id = _secrets.token_hex(8)
+    client = get_client()
+
+    async def _run():
+        try:
+            await execute_delete(client, preview_token, delete_id)
+        except Exception as e:
+            logger.error(f"Background bulk delete error: {e}")
+            BULK_DELETE_PROGRESS[delete_id] = BULK_DELETE_PROGRESS.get(delete_id, {})
+            BULK_DELETE_PROGRESS[delete_id]["status"] = "error"
+            BULK_DELETE_PROGRESS[delete_id]["error_msg"] = str(e)
+
+    task = asyncio.create_task(_run())
+    if not hasattr(app.state, "bulk_delete_tasks"):
+        app.state.bulk_delete_tasks = set()
+    app.state.bulk_delete_tasks.add(task)
+    task.add_done_callback(app.state.bulk_delete_tasks.discard)
+
+    return JSONResponse({"status": "started", "delete_id": delete_id})
+
+
+@app.post("/api/getBulkDeleteProgress")
+async def get_bulk_delete_progress(request: Request):
+    from utils.bulk_delete import BULK_DELETE_PROGRESS
+
+    data = await request.json()
+    if data.get("password") != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    delete_id = data.get("delete_id")
+    if not delete_id or delete_id not in BULK_DELETE_PROGRESS:
+        return JSONResponse({"status": "not found"})
+
+    return JSONResponse({"status": "ok", "data": BULK_DELETE_PROGRESS[delete_id]})
+
+
+@app.post("/api/cancelBulkDelete")
+async def cancel_bulk_delete(request: Request):
+    from utils.bulk_delete import BULK_DELETE_CANCEL
+
+    data = await request.json()
+    if data.get("password") != ADMIN_PASSWORD:
+        return JSONResponse({"status": "Invalid password"})
+
+    delete_id = data.get("delete_id")
+    if delete_id:
+        BULK_DELETE_CANCEL.add(delete_id)
+        return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "error", "message": "delete_id required"})
