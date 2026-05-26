@@ -24,7 +24,11 @@ from pyrogram import Client
 from pyrogram.errors import FloodWait
 
 from utils.logger import Logger
-from utils.directoryHandler import DRIVE_DATA
+import utils.directoryHandler as _dh
+
+def _drive():
+    """Return the current DRIVE_DATA, freshly read from the module each call."""
+    return _dh.DRIVE_DATA
 from config import STORAGE_CHANNEL
 
 logger = Logger(__name__)
@@ -69,7 +73,7 @@ def _iter_drive_files():
                 yield item, folder
             elif getattr(item, "type", None) == "folder":
                 yield from walk(item)
-    yield from walk(DRIVE_DATA.contents["/"])
+    yield from walk(_drive().contents["/"])
 
 
 def _expire_old_previews():
@@ -214,7 +218,7 @@ async def execute_delete(
         try:
             drive_path = _drive_path_for_file(m["id"])
             if drive_path:
-                DRIVE_DATA.delete_file_folder(drive_path)
+                _drive().delete_file_folder(drive_path)
                 BULK_DELETE_PROGRESS[delete_id]["drive_deleted"] += 1
                 BULK_DELETE_PROGRESS[delete_id]["current_file"] = m["name"]
         except Exception as e:
@@ -222,7 +226,7 @@ async def execute_delete(
             BULK_DELETE_PROGRESS[delete_id]["errors"] += 1
 
     try:
-        DRIVE_DATA.save()
+        _drive().save()
     except Exception:
         pass
 

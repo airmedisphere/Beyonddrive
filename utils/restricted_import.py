@@ -28,7 +28,11 @@ from pyrogram.errors import FloodWait, FileReferenceExpired
 from pyrogram.utils import get_channel_id
 
 from utils.logger import Logger
-from utils.directoryHandler import DRIVE_DATA
+import utils.directoryHandler as _dh
+
+def _drive():
+    """Return the current DRIVE_DATA, freshly read from the module each call."""
+    return _dh.DRIVE_DATA
 from config import STORAGE_CHANNEL
 
 logger = Logger(__name__)
@@ -225,7 +229,7 @@ class RestrictedImportManager:
                 return False
 
             # Register in DRIVE_DATA — same pattern as fast_import
-            DRIVE_DATA.register_file(destination_folder, fname, sent.id, fsize, fdur)
+            _drive().register_file(destination_folder, fname, sent.id, fsize, fdur)
             return True
 
         except Exception as e:
@@ -315,7 +319,7 @@ class RestrictedImportManager:
                         # Save drive every 10 files so progress is durable
                         if (RESTRICTED_PROGRESS[import_id]["imported"] % 10) == 0:
                             try:
-                                DRIVE_DATA.save()
+                                _drive().save()
                             except Exception:
                                 pass
 
@@ -328,7 +332,7 @@ class RestrictedImportManager:
 
             # Final save
             try:
-                DRIVE_DATA.save()
+                _drive().save()
             except Exception:
                 pass
 
