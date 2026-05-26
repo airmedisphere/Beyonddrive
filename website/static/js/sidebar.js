@@ -140,3 +140,75 @@ document.getElementById('smart-bulk-check').addEventListener('click', checkChann
 document.getElementById('smart-bulk-start').addEventListener('click', Start_Smart_Bulk_Import);
 
 // Smart Bulk Import End
+
+// Restricted Content Import Start
+
+document.getElementById('restricted-import-btn').addEventListener('click', () => {
+    document.getElementById('restricted-links').value = '';
+
+    document.getElementById('bg-blur').style.zIndex = '2';
+    document.getElementById('bg-blur').style.opacity = '0.1';
+
+    document.getElementById('restricted-import-modal').style.zIndex = '3';
+    document.getElementById('restricted-import-modal').style.opacity = '1';
+    setTimeout(() => {
+        document.getElementById('restricted-links').focus();
+    }, 300);
+});
+
+document.getElementById('restricted-cancel').addEventListener('click', () => {
+    document.getElementById('restricted-links').value = '';
+
+    document.getElementById('bg-blur').style.opacity = '0';
+    setTimeout(() => {
+        document.getElementById('bg-blur').style.zIndex = '-1';
+    }, 300);
+    document.getElementById('restricted-import-modal').style.opacity = '0';
+    setTimeout(() => {
+        document.getElementById('restricted-import-modal').style.zIndex = '-1';
+    }, 300);
+});
+
+document.getElementById('restricted-start').addEventListener('click', Start_Restricted_Import);
+
+// Restricted Content Import End
+
+
+// Bulk Delete Start
+
+document.getElementById('bulk-delete-btn').addEventListener('click', () => {
+    document.getElementById('bulk-delete-start').value = '';
+    document.getElementById('bulk-delete-end').value = '';
+    document.getElementById('bulk-delete-preview').style.display = 'none';
+    document.getElementById('bulk-delete-preview').innerHTML = '';
+    document.getElementById('bulk-delete-confirm-btn').style.display = 'none';
+
+    document.getElementById('bg-blur').style.zIndex = '2';
+    document.getElementById('bg-blur').style.opacity = '0.1';
+
+    document.getElementById('bulk-delete-modal').style.zIndex = '3';
+    document.getElementById('bulk-delete-modal').style.opacity = '1';
+    setTimeout(() => {
+        document.getElementById('bulk-delete-start').focus();
+    }, 300);
+});
+
+document.getElementById('bulk-delete-cancel-btn').addEventListener('click', () => {
+    document.getElementById('bulk-delete-start').value = '';
+    document.getElementById('bulk-delete-end').value = '';
+    document.getElementById('bulk-delete-preview').style.display = 'none';
+
+    document.getElementById('bg-blur').style.opacity = '0';
+    setTimeout(() => {
+        document.getElementById('bg-blur').style.zIndex = '-1';
+    }, 300);
+    document.getElementById('bulk-delete-modal').style.opacity = '0';
+    setTimeout(() => {
+        document.getElementById('bulk-delete-modal').style.zIndex = '-1';
+    }, 300);
+});
+
+document.getElementById('bulk-delete-preview-btn').addEventListener('click', Bulk_Delete_Preview);
+document.getElementById('bulk-delete-confirm-btn').addEventListener('click', Bulk_Delete_Confirm);
+
+// Bulk Delete End

@@ -885,3 +885,292 @@ async function monitorEncodingProgress(encodingId) {
 }
 
 // Video Encoding End
+
+// Restricted Content Import Start
+
+let _restrictedImportId = null;
+let _restrictedPollTimer = null;
+
+async function Start_Restricted_Import() {
+    try {
+        document.getElementById('restricted-import-modal').style.opacity = '0';
+        setTimeout(() => {
+            document.getElementById('restricted-import-modal').style.zIndex = '-1';
+        }, 300);
+
+        const linksText = document.getElementById('restricted-links').value.trim();
+        if (!linksText) throw new Error('Please paste at least one Telegram link');
+        if (!linksText.includes('t.me/')) throw new Error('No valid Telegram links found');
+
+        const data = {
+            links: linksText,
+            path: getCurrentPath(),
+        };
+
+        document.getElementById('bg-blur').style.zIndex = '2';
+        document.getElementById('bg-blur').style.opacity = '0.1';
+        document.getElementById('file-uploader').style.zIndex = '3';
+        document.getElementById('file-uploader').style.opacity = '1';
+
+        document.getElementById('upload-filename').innerText = '🔒 Restricted Import';
+        document.getElementById('upload-filesize').innerText = 'Starting...';
+        document.getElementById('upload-status').innerText = 'Status: Initializing';
+        document.getElementById('upload-percent').innerText = '0%';
+        progressBar.style.width = '2%';
+
+        const startJson = await postJson('/api/restrictedImport', data);
+        if (startJson.status !== 'started') {
+            throw new Error(startJson.message || startJson.status || 'Failed to start');
+        }
+
+        _restrictedImportId = startJson.import_id;
+
+        _restrictedPollTimer = setInterval(async () => {
+            try {
+                const resp = await postJson('/api/getRestrictedProgress', {
+                    import_id: _restrictedImportId,
+                });
+                if (resp.status !== 'ok') return;
+
+                const d = resp.data;
+                const total = d.total || 1;
+                const done = (d.imported || 0) + (d.errors || 0) + (d.skipped || 0);
+                const pct = total > 0 ? Math.min(99, Math.round(done / total * 100)) : 1;
+
+                const statusLabels = {
+                    starting: 'Starting...',
+                    importing: `Job ${d.current_job}/${d.total_jobs} — ${d.imported || 0} done, ${d.errors || 0} errors`,
+                    done: '✅ Import complete!',
+                    cancelled: '⚠️ Import cancelled',
+                    error: '❌ Error: ' + (d.error_msg || 'unknown'),
+                };
+                const statusText = statusLabels[d.status] || d.status;
+
+                document.getElementById('upload-filename').innerText =
+                    '🔒 ' + (d.current_file || 'Restricted Import');
+                document.getElementById('upload-filesize').innerText =
+                    `${d.imported || 0} imported / ${d.total || '?'} total`;
+                document.getElementById('upload-status').innerText = statusText;
+                document.getElementById('upload-percent').innerText = pct + '%';
+                progressBar.style.width = pct + '%';
+
+                if (d.status === 'done') {
+                    clearInterval(_restrictedPollTimer);
+                    progressBar.style.width = '100%';
+                    document.getElementById('upload-percent').innerText = '100%';
+                    const elapsed = d.elapsed ? ` in ${d.elapsed}s` : '';
+                    setTimeout(() => {
+                        alert(`✅ Restricted Import Complete!\n\nImported: ${d.imported}\nSkipped: ${d.skipped}\nErrors: ${d.errors}${elapsed}\n\nFiles are now in your drive.`);
+                        window.location.reload();
+                    }, 600);
+                } else if (d.status === 'error' || d.status === 'cancelled') {
+                    clearInterval(_restrictedPollTimer);
+                    setTimeout(() => {
+                        alert(d.status === 'error'
+                            ? 'Restricted Import Error: ' + (d.error_msg || 'unknown')
+                            : 'Restricted Import Cancelled');
+                        window.location.reload();
+                    }, 400);
+                }
+            } catch (pollErr) { /* keep polling */ }
+        }, 1500);
+
+    } catch (err) {
+        if (_restrictedPollTimer) clearInterval(_restrictedPollTimer);
+        alert('Restricted Import Error: ' + (err.message || err));
+        window.location.reload();
+    }
+}
+
+async function cancelCurrentRestrictedImport() {
+    if (_restrictedImportId) {
+        await postJson('/api/cancelRestrictedImport', { import_id: _restrictedImportId });
+        if (_restrictedPollTimer) clearInterval(_restrictedPollTimer);
+        window.location.reload();
+    }
+}
+
+// Restricted Content Import End
+
+
+// Bulk Delete Start
+
+let _bulkDeleteToken = null;
+let _bulkDeleteId = null;
+let _bulkDeletePollTimer = null;
+
+function _formatSize(bytes) {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    let n = bytes;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return n.toFixed(2) + ' ' + units[i];
+}
+
+async function Bulk_Delete_Preview() {
+    const start = document.getElementById('bulk-delete-start').value.trim();
+    const end = document.getElementById('bulk-delete-end').value.trim();
+    const previewBox = document.getElementById('bulk-delete-preview');
+
+    if (!start || !end) {
+        alert('Both start and end links are required');
+        return;
+    }
+
+    previewBox.style.display = 'block';
+    previewBox.innerHTML = '<em>🔍 Scanning drive...</em>';
+    document.getElementById('bulk-delete-confirm-btn').style.display = 'none';
+
+    try {
+        const result = await postJson('/api/previewBulkDelete', {
+            start_link: start,
+            end_link: end,
+        });
+
+        if (result.status !== 'ok') {
+            previewBox.innerHTML = `<div style="color:#d9534f;"><strong>❌ ${result.message || result.status}</strong></div>`;
+            return;
+        }
+
+        if (result.count === 0) {
+            previewBox.innerHTML = `
+                <div style="background:#e8f5e9;border:1px solid #4caf50;padding:12px;border-radius:6px;">
+                    <strong>✅ No files found in this range.</strong><br>
+                    <span style="font-size:13px;">Scanned message IDs ${result.start_id} to ${result.end_id} (${result.range_size} messages). None of them are linked to drive entries.</span>
+                </div>`;
+            return;
+        }
+
+        _bulkDeleteToken = result.preview_token;
+
+        let fileList = result.matches.map(m =>
+            `<li style="margin: 4px 0; font-family: monospace; font-size: 12px;">
+                <span style="color:#999;">[${m.file_id}]</span>
+                ${m.name}
+                <span style="color:#777;">(${_formatSize(m.size)})</span>
+                <span style="color:#aaa;">— ${m.path}</span>
+            </li>`
+        ).join('');
+
+        if (result.truncated) {
+            fileList += `<li style="color:#999; font-style: italic;">... and ${result.count - 50} more</li>`;
+        }
+
+        previewBox.innerHTML = `
+            <div style="background:#ffebee;border:2px solid #d9534f;padding:14px;border-radius:8px;">
+                <h4 style="color:#d9534f;margin:0 0 10px 0;">⚠️ ${result.count} file(s) will be PERMANENTLY deleted</h4>
+                <div style="margin-bottom: 10px;">
+                    <strong>Range:</strong> ${result.start_id} → ${result.end_id} (${result.range_size} message IDs scanned)<br>
+                    <strong>Total size:</strong> ${_formatSize(result.total_size)}
+                </div>
+                <details>
+                    <summary style="cursor:pointer; user-select:none;"><strong>Show file list</strong></summary>
+                    <ul style="max-height: 250px; overflow-y: auto; padding-left: 20px; margin-top: 8px;">
+                        ${fileList}
+                    </ul>
+                </details>
+                <div style="margin-top: 12px; padding: 8px; background: #fff3e0; border-radius: 4px; font-size: 13px;">
+                    <strong>This cannot be undone.</strong> Once confirmed, the Telegram messages will be deleted (you cannot recover them).
+                </div>
+            </div>`;
+
+        document.getElementById('bulk-delete-confirm-btn').style.display = 'inline-block';
+    } catch (err) {
+        previewBox.innerHTML = `<div style="color:#d9534f;"><strong>❌ ${err.message || err}</strong></div>`;
+    }
+}
+
+async function Bulk_Delete_Confirm() {
+    if (!_bulkDeleteToken) {
+        alert('Please preview first.');
+        return;
+    }
+
+    const ok = confirm('⚠️ FINAL WARNING\n\nThis will permanently delete the files from Telegram and your drive.\n\nThere is no undo. Proceed?');
+    if (!ok) return;
+
+    try {
+        document.getElementById('bulk-delete-modal').style.opacity = '0';
+        setTimeout(() => {
+            document.getElementById('bulk-delete-modal').style.zIndex = '-1';
+        }, 300);
+
+        document.getElementById('bg-blur').style.zIndex = '2';
+        document.getElementById('bg-blur').style.opacity = '0.1';
+        document.getElementById('file-uploader').style.zIndex = '3';
+        document.getElementById('file-uploader').style.opacity = '1';
+
+        document.getElementById('upload-filename').innerText = '🗑️ Bulk Delete';
+        document.getElementById('upload-filesize').innerText = 'Starting...';
+        document.getElementById('upload-status').innerText = 'Status: Initializing';
+        document.getElementById('upload-percent').innerText = '0%';
+        progressBar.style.width = '2%';
+
+        const startJson = await postJson('/api/confirmBulkDelete', {
+            preview_token: _bulkDeleteToken,
+        });
+
+        if (startJson.status !== 'started') {
+            throw new Error(startJson.message || startJson.status || 'Failed to start delete');
+        }
+
+        _bulkDeleteId = startJson.delete_id;
+
+        _bulkDeletePollTimer = setInterval(async () => {
+            try {
+                const resp = await postJson('/api/getBulkDeleteProgress', {
+                    delete_id: _bulkDeleteId,
+                });
+                if (resp.status !== 'ok') return;
+
+                const d = resp.data;
+                const total = d.total || 1;
+                const done = (d.drive_deleted || 0);
+                const pct = total > 0 ? Math.min(99, Math.round(done / total * 100)) : 1;
+
+                document.getElementById('upload-filename').innerText =
+                    '🗑️ ' + (d.current_file || 'Deleting...');
+                document.getElementById('upload-filesize').innerText =
+                    `Telegram: ${d.telegram_deleted || 0}/${total}  •  Drive: ${d.drive_deleted || 0}/${total}`;
+                document.getElementById('upload-status').innerText = 'Status: ' + d.status;
+                document.getElementById('upload-percent').innerText = pct + '%';
+                progressBar.style.width = pct + '%';
+
+                if (d.status === 'done') {
+                    clearInterval(_bulkDeletePollTimer);
+                    progressBar.style.width = '100%';
+                    document.getElementById('upload-percent').innerText = '100%';
+                    const elapsed = d.elapsed ? ` in ${d.elapsed}s` : '';
+                    setTimeout(() => {
+                        alert(`✅ Bulk Delete Complete!\n\nTelegram messages deleted: ${d.telegram_deleted}\nDrive entries removed: ${d.drive_deleted}\nErrors: ${d.errors}${elapsed}`);
+                        window.location.reload();
+                    }, 600);
+                } else if (d.status === 'error' || d.status === 'cancelled') {
+                    clearInterval(_bulkDeletePollTimer);
+                    setTimeout(() => {
+                        alert(d.status === 'error'
+                            ? 'Bulk Delete Error: ' + (d.error_msg || 'unknown')
+                            : 'Bulk Delete Cancelled (partial deletion may have occurred)');
+                        window.location.reload();
+                    }, 400);
+                }
+            } catch (pollErr) { /* keep polling */ }
+        }, 1200);
+
+    } catch (err) {
+        if (_bulkDeletePollTimer) clearInterval(_bulkDeletePollTimer);
+        alert('Bulk Delete Error: ' + (err.message || err));
+        window.location.reload();
+    }
+}
+
+async function cancelCurrentBulkDelete() {
+    if (_bulkDeleteId) {
+        await postJson('/api/cancelBulkDelete', { delete_id: _bulkDeleteId });
+        if (_bulkDeletePollTimer) clearInterval(_bulkDeletePollTimer);
+        window.location.reload();
+    }
+}
+
+// Bulk Delete End
