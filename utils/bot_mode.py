@@ -2219,7 +2219,7 @@ async def start_bot_mode(d, b):
 # ═══════════════════════════════════════════════════════════════════════════════
 # /restricted_import — handle restricted-content downloads via the bot
 # ═══════════════════════════════════════════════════════════════════════════════
-@Client.on_message(
+@main_bot.on_message(
     filters.command("restricted_import")
     & filters.private
     & filters.user(config.TELEGRAM_ADMIN_IDS),
@@ -2366,7 +2366,7 @@ async def restricted_import_handler(client: Client, message: Message):
 # ═══════════════════════════════════════════════════════════════════════════════
 # /bulk_delete — delete a range of messages from STORAGE_CHANNEL + drive
 # ═══════════════════════════════════════════════════════════════════════════════
-@Client.on_message(
+@main_bot.on_message(
     filters.command("bulk_delete")
     & filters.private
     & filters.user(config.TELEGRAM_ADMIN_IDS),
