@@ -24,6 +24,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const bulkMove = document.getElementById('bulk-move');
     const bulkCopy = document.getElementById('bulk-copy');
     const bulkDelete = document.getElementById('bulk-delete');
+    const bulkSelectAll = document.getElementById('bulk-select-all');
+    const bulkDeselectAll = document.getElementById('bulk-deselect-all');
+    const bulkDeletePermanent = document.getElementById('bulk-delete-permanent');
     
     // Search suggestions
     const fileSearch = document.getElementById('file-search');
@@ -112,14 +115,114 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    bulkDelete.addEventListener('click', function() {
-        if (selectedItems.size > 0) {
-            if (confirm(`Are you sure you want to archive ${selectedItems.size} items?`)) {
-                // Implement bulk delete functionality
-                console.log('Bulk delete:', Array.from(selectedItems));
+    bulkDelete.addEventListener('click', async function() {
+        if (selectedItems.size === 0) return;
+        if (!confirm(`Send ${selectedItems.size} item(s) to Archive?`)) return;
+        await bulkArchiveOrDelete(true);
+    });
+
+    if (bulkDeletePermanent) {
+        bulkDeletePermanent.addEventListener('click', async function() {
+            if (selectedItems.size === 0) return;
+            if (!confirm(`⚠️ PERMANENTLY DELETE ${selectedItems.size} item(s)?\n\nThis CANNOT be undone.`)) return;
+            await bulkArchiveOrDelete(false);
+        });
+    }
+
+    if (bulkSelectAll) {
+        bulkSelectAll.addEventListener('click', function() {
+            const checkboxes = document.querySelectorAll('.directory-item .selection-checkbox');
+            checkboxes.forEach(cb => {
+                if (!cb.checked) {
+                    cb.checked = true;
+                    const item = cb.closest('.directory-item');
+                    const id = item.getAttribute('data-id');
+                    if (id) selectedItems.add(id);
+                }
+            });
+            updateBulkActions();
+            bulkSelectAll.style.display = 'none';
+            if (bulkDeselectAll) bulkDeselectAll.style.display = 'inline-block';
+        });
+    }
+
+    if (bulkDeselectAll) {
+        bulkDeselectAll.addEventListener('click', function() {
+            const checkboxes = document.querySelectorAll('.directory-item .selection-checkbox');
+            checkboxes.forEach(cb => { cb.checked = false; });
+            selectedItems.clear();
+            updateBulkActions();
+            bulkDeselectAll.style.display = 'none';
+            if (bulkSelectAll) bulkSelectAll.style.display = 'inline-block';
+        });
+    }
+
+    // Show "Delete Permanently" button only when viewing /trash
+    if (window.location.pathname === '/' && window.location.search.includes('path=/trash')) {
+        if (bulkDeletePermanent) bulkDeletePermanent.style.display = 'inline-block';
+        if (bulkDelete) bulkDelete.style.display = 'none';
+    }
+
+    async function bulkArchiveOrDelete(archiveOnly) {
+        const items = Array.from(selectedItems);
+        const total = items.length;
+
+        // Collect paths from the DOM (selectedItems only has ids)
+        const tasks = [];
+        for (const id of items) {
+            const itemEl = document.querySelector(`.directory-item[data-id="${id}"]`);
+            if (!itemEl) continue;
+            const itemPath = itemEl.getAttribute('data-path');
+            if (!itemPath) continue;
+            tasks.push({ id, path: itemPath + '/' + id });
+        }
+
+        const total_real = tasks.length;
+        if (total_real === 0) {
+            alert('Could not resolve item paths. Reload and try again.');
+            return;
+        }
+
+        // Show a simple inline progress indicator on the toolbar
+        const originalText = bulkCount.textContent;
+        let done = 0, errors = 0;
+
+        // Concurrency limit — 4 parallel requests is enough; more risks rate limits
+        const CONCURRENCY = 4;
+        let cursor = 0;
+        async function worker() {
+            while (cursor < tasks.length) {
+                const my = cursor++;
+                const t = tasks[my];
+                try {
+                    let resp;
+                    if (archiveOnly) {
+                        resp = await postJson('/api/trashFileFolder', { path: t.path, trash: true });
+                    } else {
+                        resp = await postJson('/api/deleteFileFolder', { path: t.path });
+                    }
+                    if (resp && resp.status === 'ok') {
+                        done++;
+                    } else {
+                        errors++;
+                    }
+                } catch (e) {
+                    errors++;
+                }
+                bulkCount.textContent = `${done + errors}/${total_real} processed (${errors} errors)`;
             }
         }
-    });
+        const workers = [];
+        for (let i = 0; i < CONCURRENCY; i++) workers.push(worker());
+        await Promise.all(workers);
+
+        alert(
+            archiveOnly
+                ? `✅ Archived ${done} item(s).\nErrors: ${errors}`
+                : `🗑️ Permanently deleted ${done} item(s).\nErrors: ${errors}`
+        );
+        window.location.reload();
+    }
     
     // Smart search functionality
     if (isSmartSearchEnabled) {
