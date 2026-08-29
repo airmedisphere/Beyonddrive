@@ -4,6 +4,13 @@ Books Library Module
 Completely separate from the main TGDrive file browser.
 Uses BOOKS_CHANNEL for storage and its own books.data file for metadata.
 Only accessible via /api/books/* endpoints (for the Vercel frontend).
+
+Two ways a book can get in:
+1. Website upload (POST /api/books/upload) -> upload_book_to_telegram()
+   sends the file to BOOKS_CHANNEL and registers it directly.
+2. Manual Telegram upload -> a file posted straight into BOOKS_CHANNEL is
+   picked up by the listener registered in register_books_channel_listener()
+   and auto-registered the same way, so it shows up on the website too.
 """
 
 from __future__ import annotations
@@ -18,12 +25,17 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 import dill
-from pyrogram import Client
+from pyrogram import Client, filters
+from pyrogram.handlers import MessageHandler
 from pyrogram.types import Message
 
 import config
 from utils.logger import Logger
 from utils.clients import get_client
+
+# File types accepted both from the website uploader and from manual
+# Telegram uploads picked up by the channel listener.
+ALLOWED_BOOK_EXTENSIONS = {".pdf", ".epub", ".mobi", ".azw3", ".txt", ".djvu"}
 
 logger = Logger(__name__)
 
@@ -275,6 +287,109 @@ async def upload_book_to_telegram(
     BOOKS_DATA.add_book(book)
     logger.info(f"Book uploaded: {book.title} (id={book.id}, msg={message.id})")
     return book
+
+
+def _book_from_channel_message(message: Message) -> Optional[Book]:
+    """
+    Build a Book from a raw Telegram message posted in BOOKS_CHANNEL.
+    Used to auto-register files that were uploaded directly in Telegram
+    (i.e. not through the website's /api/books/upload endpoint).
+    Returns None if the message isn't a supported book file.
+    """
+    media = message.document or message.video or message.audio
+    if not media:
+        return None
+
+    filename = getattr(media, "file_name", None) or f"book_{message.id}"
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_BOOK_EXTENSIONS:
+        return None
+
+    # Optionally parse "Title: ...", "Author: ...", "Tags: a, b" lines out
+    # of the caption (this is exactly the caption format upload_book_to_telegram
+    # writes, so books uploaded via the website parse back out cleanly too).
+    title, author, tags = None, "", []
+    caption = message.caption or ""
+    for line in caption.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip().lower()
+        value = value.strip()
+        if key == "title":
+            title = value
+        elif key == "author":
+            author = value
+        elif key == "tags":
+            tags = [t.strip() for t in value.split(",") if t.strip()]
+
+    if not title:
+        first_line = caption.strip().splitlines()[0] if caption.strip() else ""
+        title = first_line.lstrip("📚").strip() or Path(filename).stem
+
+    return Book(
+        title=title,
+        message_id=message.id,
+        size=media.file_size,
+        filename=filename,
+        author=author,
+        tags=tags,
+    )
+
+
+def register_books_channel_listener(clients: List[Client]) -> None:
+    """
+    Watch BOOKS_CHANNEL for messages and auto-register any supported book
+    file that shows up there — whether it was uploaded through the website
+    or posted directly in Telegram by hand. This is what makes "drop a file
+    into the channel and it appears on the site" work.
+
+    Call once at startup, after clients are connected, with the list of
+    bot clients (they must already be admins of BOOKS_CHANNEL).
+    """
+    if not config.BOOKS_CHANNEL:
+        return
+    if not clients:
+        logger.warning("No Telegram clients available; books channel listener not registered.")
+        return
+
+    async def _on_channel_message(client: Client, message: Message):
+        global BOOKS_DATA
+        if BOOKS_DATA is None:
+            load_books_data()
+
+        # If this message was just sent by upload_book_to_telegram(), it may
+        # already be registered (or about to be, a moment before this event
+        # is delivered). Give that a brief head start, then re-check, so we
+        # don't create a duplicate, metadata-poorer entry for the same file.
+        for _ in range(2):
+            if any(b.message_id == message.id for b in BOOKS_DATA.books.values()):
+                return
+            await asyncio.sleep(1)
+
+        # Skip the periodic books.data metadata backup file itself.
+        if message.document and message.document.file_name == "books.data":
+            return
+
+        book = _book_from_channel_message(message)
+        if not book:
+            return
+
+        BOOKS_DATA.add_book(book)
+        logger.info(
+            f"Auto-registered book posted directly in BOOKS_CHANNEL: "
+            f"{book.title} (id={book.id}, msg={message.id})"
+        )
+
+    handler_filter = filters.chat(config.BOOKS_CHANNEL) & (
+        filters.document | filters.video | filters.audio
+    )
+
+    for client in clients:
+        client.add_handler(MessageHandler(_on_channel_message, handler_filter))
+
+    logger.info(f"Books channel listener registered on {len(clients)} client(s).")
 
 
 async def stream_book(book_id: str, request):
