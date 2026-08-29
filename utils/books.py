@@ -32,6 +32,11 @@ from pyrogram.types import Message
 import config
 from utils.logger import Logger
 from utils.clients import get_client
+from utils.book_converter import (
+    needs_conversion,
+    NATIVE_READER_FORMATS,
+    convert_book,
+)
 
 # File types accepted both from the website uploader and from manual
 # Telegram uploads picked up by the channel listener.
@@ -53,6 +58,7 @@ def _utc_now() -> str:
 
 
 class Book:
+    # reader_status values: "ready" | "converting" | "failed" | "unsupported"
     def __init__(
         self,
         title: str,
@@ -65,6 +71,10 @@ class Book:
         language: str = "",
         cover_message_id: Optional[int] = None,
         book_id: Optional[str] = None,
+        reader_message_id: Optional[int] = None,
+        reader_format: Optional[str] = None,
+        reader_status: str = "unsupported",
+        reader_error: Optional[str] = None,
     ):
         self.id = book_id or _generate_id()
         self.title = title
@@ -78,6 +88,16 @@ class Book:
         self.size = size
         self.uploaded_at = _utc_now()
         self.updated_at = self.uploaded_at
+
+        # Reader support: which message holds a reader-friendly version of
+        # this book, in what format, and whether it's ready yet. For
+        # PDF/EPUB/TXT this is set immediately (== the original file, no
+        # conversion needed). For MOBI/AZW3/DJVU it starts as "converting"
+        # and gets filled in once background conversion finishes.
+        self.reader_message_id = reader_message_id
+        self.reader_format = reader_format
+        self.reader_status = reader_status
+        self.reader_error = reader_error
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -93,6 +113,9 @@ class Book:
             "size": self.size,
             "uploaded_at": self.uploaded_at,
             "updated_at": self.updated_at,
+            "reader_format": self.reader_format,
+            "reader_status": self.reader_status,
+            "reader_error": self.reader_error,
         }
 
     @classmethod
@@ -108,6 +131,10 @@ class Book:
             language=data.get("language", ""),
             cover_message_id=data.get("cover_message_id"),
             book_id=data.get("id"),
+            reader_message_id=data.get("reader_message_id"),
+            reader_format=data.get("reader_format"),
+            reader_status=data.get("reader_status", "unsupported"),
+            reader_error=data.get("reader_error"),
         )
         book.uploaded_at = data.get("uploaded_at", book.uploaded_at)
         book.updated_at = data.get("updated_at", book.updated_at)
@@ -149,6 +176,24 @@ class BooksLibrary:
             return None
         for key, value in kwargs.items():
             if hasattr(book, key) and value is not None:
+                setattr(book, key, value)
+        book.updated_at = _utc_now()
+        self.save()
+        return book
+
+    def set_reader_state(self, book_id: str, **kwargs) -> Optional[Book]:
+        """
+        Like update_book(), but allows explicitly setting a field to None
+        (needed to clear reader_error once a conversion succeeds — the
+        general update_book() intentionally ignores None so it can't be
+        used to blank out a field via the public PATCH endpoint).
+        Only used internally by the reader-conversion pipeline.
+        """
+        book = self.books.get(book_id)
+        if not book:
+            return None
+        for key, value in kwargs.items():
+            if hasattr(book, key):
                 setattr(book, key, value)
         book.updated_at = _utc_now()
         self.save()
@@ -241,7 +286,17 @@ async def upload_book_to_telegram(
     tags: Optional[List[str]] = None,
     language: str = "",
 ) -> Book:
-    """Upload a book file to BOOKS_CHANNEL and register it in the library."""
+    """
+    Upload a book file to BOOKS_CHANNEL and register it in the library.
+
+    PDF/EPUB/TXT are reader-ready immediately (no conversion needed).
+    MOBI/AZW3/DJVU are registered with reader_status="converting" and a
+    background task is kicked off to convert them to EPUB/PDF and attach
+    the result — this call returns right away rather than blocking the
+    HTTP request on a conversion that can take a while. The frontend
+    polls GET /api/books/{id}/reader-info until reader_status flips to
+    "ready" (or "failed").
+    """
     if not config.BOOKS_CHANNEL:
         raise RuntimeError("BOOKS_CHANNEL is not configured")
 
@@ -249,7 +304,7 @@ async def upload_book_to_telegram(
         load_books_data()
 
     client: Client = get_client()
-    file_size = os.path.getsize(file_path)
+    ext = Path(filename).suffix.lower()
 
     # Caption with basic metadata (helps if you ever scan the channel manually)
     caption_parts = [f"📚 {title}"]
@@ -274,6 +329,17 @@ async def upload_book_to_telegram(
         or message.audio
     ).file_size
 
+    if ext in NATIVE_READER_FORMATS:
+        reader_kwargs = dict(
+            reader_message_id=message.id,
+            reader_format=NATIVE_READER_FORMATS[ext],
+            reader_status="ready",
+        )
+    elif needs_conversion(ext):
+        reader_kwargs = dict(reader_status="converting")
+    else:
+        reader_kwargs = dict(reader_status="unsupported")
+
     book = Book(
         title=title or Path(filename).stem,
         message_id=message.id,
@@ -283,10 +349,76 @@ async def upload_book_to_telegram(
         description=description,
         tags=tags or [],
         language=language,
+        **reader_kwargs,
     )
     BOOKS_DATA.add_book(book)
     logger.info(f"Book uploaded: {book.title} (id={book.id}, msg={message.id})")
+
+    if needs_conversion(ext):
+        # Work off an independent copy of the file so this survives the
+        # caller deleting its own tmp upload file right after we return.
+        import shutil as _shutil
+        import tempfile as _tempfile
+
+        fd, copy_path = _tempfile.mkstemp(suffix=ext)
+        os.close(fd)
+        _shutil.copy2(file_path, copy_path)
+        asyncio.create_task(_convert_and_attach_reader(book.id, copy_path, ext))
+
     return book
+
+
+async def _convert_and_attach_reader(book_id: str, source_path: str, ext: str) -> None:
+    """
+    Background job: convert a MOBI/AZW3/DJVU file to a reader-friendly
+    format, upload the result to BOOKS_CHANNEL, and attach it to the book.
+    Always cleans up `source_path` when done, regardless of outcome.
+    """
+    global BOOKS_DATA
+    try:
+        out_path, out_format, err = await convert_book(source_path, ext)
+        if not out_path:
+            if BOOKS_DATA:
+                BOOKS_DATA.set_reader_state(
+                    book_id,
+                    reader_status="failed",
+                    reader_error=err or "Conversion failed",
+                )
+            logger.error(f"Reader conversion failed for book {book_id}: {err}")
+            return
+
+        try:
+            client = get_client()
+            message = await client.send_document(
+                config.BOOKS_CHANNEL,
+                out_path,
+                caption="Reader version (auto-converted). Do not delete.",
+                file_name=Path(out_path).name,
+                disable_notification=True,
+            )
+            if BOOKS_DATA:
+                BOOKS_DATA.set_reader_state(
+                    book_id,
+                    reader_message_id=message.id,
+                    reader_format=out_format,
+                    reader_status="ready",
+                    reader_error=None,
+                )
+            logger.info(f"Reader version ready for book {book_id} (format={out_format})")
+        finally:
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+    except Exception as e:
+        logger.error(f"Reader conversion crashed for book {book_id}: {e}")
+        if BOOKS_DATA:
+            BOOKS_DATA.set_reader_state(book_id, reader_status="failed", reader_error=str(e))
+    finally:
+        try:
+            os.remove(source_path)
+        except OSError:
+            pass
 
 
 def _book_from_channel_message(message: Message) -> Optional[Book]:
@@ -328,6 +460,17 @@ def _book_from_channel_message(message: Message) -> Optional[Book]:
         first_line = caption.strip().splitlines()[0] if caption.strip() else ""
         title = first_line.lstrip("📚").strip() or Path(filename).stem
 
+    if ext in NATIVE_READER_FORMATS:
+        reader_kwargs = dict(
+            reader_message_id=message.id,
+            reader_format=NATIVE_READER_FORMATS[ext],
+            reader_status="ready",
+        )
+    elif needs_conversion(ext):
+        reader_kwargs = dict(reader_status="converting")
+    else:
+        reader_kwargs = dict(reader_status="unsupported")
+
     return Book(
         title=title,
         message_id=message.id,
@@ -335,6 +478,7 @@ def _book_from_channel_message(message: Message) -> Optional[Book]:
         filename=filename,
         author=author,
         tags=tags,
+        **reader_kwargs,
     )
 
 
@@ -344,6 +488,11 @@ def register_books_channel_listener(clients: List[Client]) -> None:
     file that shows up there — whether it was uploaded through the website
     or posted directly in Telegram by hand. This is what makes "drop a file
     into the channel and it appears on the site" work.
+
+    For MOBI/AZW3/DJVU files posted manually (no local copy on our server
+    yet), the file is downloaded from Telegram and the same background
+    conversion pipeline used for website uploads is kicked off, so manual
+    uploads get an in-browser reader too, not just website uploads.
 
     Call once at startup, after clients are connected, with the list of
     bot clients (they must already be admins of BOOKS_CHANNEL).
@@ -368,8 +517,12 @@ def register_books_channel_listener(clients: List[Client]) -> None:
                 return
             await asyncio.sleep(1)
 
-        # Skip the periodic books.data metadata backup file itself.
-        if message.document and message.document.file_name == "books.data":
+        # Skip the periodic books.data metadata backup file, and any
+        # already-uploaded reader-conversion output files (these carry a
+        # distinctive caption and a ".converted." marker in the filename).
+        doc_name = message.document.file_name if message.document else None
+        is_reader_output = doc_name and ".converted." in doc_name
+        if doc_name == "books.data" or is_reader_output:
             return
 
         book = _book_from_channel_message(message)
@@ -381,6 +534,26 @@ def register_books_channel_listener(clients: List[Client]) -> None:
             f"Auto-registered book posted directly in BOOKS_CHANNEL: "
             f"{book.title} (id={book.id}, msg={message.id})"
         )
+
+        ext = Path(book.filename).suffix.lower()
+        if needs_conversion(ext):
+            import tempfile as _tempfile
+
+            fd, download_path = _tempfile.mkstemp(suffix=ext)
+            os.close(fd)
+            try:
+                await client.download_media(message, file_name=download_path)
+            except Exception as e:
+                logger.error(f"Failed to download manually-posted book for conversion: {e}")
+                BOOKS_DATA.set_reader_state(
+                    book.id, reader_status="failed", reader_error=str(e)
+                )
+                try:
+                    os.remove(download_path)
+                except OSError:
+                    pass
+                return
+            asyncio.create_task(_convert_and_attach_reader(book.id, download_path, ext))
 
     handler_filter = filters.chat(config.BOOKS_CHANNEL) & (
         filters.document | filters.video | filters.audio
@@ -410,6 +583,38 @@ async def stream_book(book_id: str, request):
         config.BOOKS_CHANNEL,
         book.message_id,
         book.filename,
+        request,
+    )
+
+
+async def stream_reader_file(book_id: str, request):
+    """
+    Stream the reader-ready version of a book (used by the in-browser
+    reader). This is the original file for PDF/EPUB/TXT, or the converted
+    output for MOBI/AZW3/DJVU once conversion has finished.
+    Raises FileNotFoundError if the book doesn't exist, and
+    RuntimeError("not_ready") if a conversion is still in progress or failed.
+    """
+    from utils.streamer import media_streamer
+
+    if not config.BOOKS_CHANNEL:
+        raise RuntimeError("BOOKS_CHANNEL is not configured")
+
+    if BOOKS_DATA is None:
+        load_books_data()
+
+    book = BOOKS_DATA.get_book(book_id)
+    if not book:
+        raise FileNotFoundError("Book not found")
+
+    if book.reader_status != "ready" or not book.reader_message_id:
+        raise RuntimeError("not_ready")
+
+    reader_filename = f"{Path(book.filename).stem}.{book.reader_format}"
+    return await media_streamer(
+        config.BOOKS_CHANNEL,
+        book.reader_message_id,
+        reader_filename,
         request,
     )
 

@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, Query
+from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, Query, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import config
@@ -21,6 +21,7 @@ from utils.books import (
     get_books_data,
     upload_book_to_telegram,
     stream_book,
+    stream_reader_file,
 )
 
 logger = Logger(__name__)
@@ -38,6 +39,37 @@ def _ensure_books_enabled():
     # use if necessary. Do NOT import BOOKS_DATA by name at module level —
     # that captures a stale None reference and never sees later updates.
     return get_books_data()
+
+
+def _require_admin(x_admin_password: Optional[str] = Header(None)):
+    """
+    Guards write/management operations (edit, delete). The website's admin
+    page prompts for a password once and sends it back on this header for
+    every admin action; nothing here is stored server-side beyond the
+    single ADMIN_PASSWORD env var already used elsewhere in this project.
+    """
+    if not config.ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin password is not configured on the server.",
+        )
+    if not x_admin_password or x_admin_password != config.ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid or missing admin password")
+
+
+@router.post("/admin/verify")
+async def verify_admin_password(request: Request):
+    """
+    Check a password against ADMIN_PASSWORD without performing any action.
+    Used by the website's admin page to gate access before showing the
+    edit/delete UI.
+    """
+    if not config.ADMIN_PASSWORD:
+        raise HTTPException(status_code=503, detail="Admin password is not configured on the server.")
+    data = await request.json()
+    if data.get("password") != config.ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid password")
+    return {"status": "ok"}
 
 
 @router.get("")
@@ -80,7 +112,7 @@ async def get_book(book_id: str):
 @router.get("/{book_id}/download")
 @router.get("/{book_id}/stream")
 async def download_book(book_id: str, request: Request):
-    """Stream / download the book file from BOOKS_CHANNEL."""
+    """Stream / download the original book file from BOOKS_CHANNEL."""
     _ensure_books_enabled()
     try:
         return await stream_book(book_id, request)
@@ -88,6 +120,45 @@ async def download_book(book_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Book not found")
     except Exception as e:
         logger.error(f"Error streaming book {book_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{book_id}/reader-info")
+async def get_reader_info(book_id: str):
+    """
+    Tell the frontend reader what format to render and whether it's ready
+    yet. PDF/EPUB/TXT are ready immediately; MOBI/AZW3/DJVU go through a
+    background conversion first, so the frontend should poll this
+    endpoint (every couple of seconds) while status == "converting".
+    """
+    books_data = _ensure_books_enabled()
+    book = books_data.get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return {
+        "status": "ok",
+        "reader_status": book.reader_status,
+        "reader_format": book.reader_format,
+        "reader_error": book.reader_error,
+        "reader_url": f"/api/books/{book_id}/reader-file" if book.reader_status == "ready" else None,
+    }
+
+
+@router.get("/{book_id}/reader-file")
+async def get_reader_file(book_id: str, request: Request):
+    """Stream the reader-ready version of the book (original or converted)."""
+    _ensure_books_enabled()
+    try:
+        return await stream_reader_file(book_id, request)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Book not found")
+    except RuntimeError:
+        raise HTTPException(
+            status_code=409,
+            detail="Reader version isn't ready yet. Poll /reader-info until reader_status is 'ready'.",
+        )
+    except Exception as e:
+        logger.error(f"Error streaming reader file for {book_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -150,8 +221,10 @@ async def upload_book(
 
 
 @router.patch("/{book_id}")
-async def update_book_metadata(book_id: str, request: Request):
-    """Update title, author, description, tags, language of a book."""
+async def update_book_metadata(
+    book_id: str, request: Request, _admin: None = Depends(_require_admin)
+):
+    """Update title, author, description, tags, language of a book. Requires admin password."""
     books_data = _ensure_books_enabled()
     data = await request.json()
     book = books_data.update_book(
@@ -168,9 +241,9 @@ async def update_book_metadata(book_id: str, request: Request):
 
 
 @router.delete("/{book_id}")
-async def delete_book(book_id: str):
+async def delete_book(book_id: str, _admin: None = Depends(_require_admin)):
     """
-    Remove a book from the library metadata.
+    Remove a book from the library metadata. Requires admin password.
     Note: the file remains in the Telegram channel (safe default).
     """
     books_data = _ensure_books_enabled()
