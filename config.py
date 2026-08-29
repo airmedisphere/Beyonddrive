@@ -21,6 +21,12 @@ STRING_SESSIONS = [
 # Chat ID of the Telegram storage channel where files will be stored
 STORAGE_CHANNEL = int(os.getenv("STORAGE_CHANNEL"))  # Your storage channel's chat ID
 
+# Dedicated Telegram channel for PDFs & Ebooks (used only by the Books website)
+# Books uploaded from the Vercel frontend go here and stay completely separate
+# from the normal TGDrive file browser. Leave empty to disable books features.
+_books_channel = os.getenv("BOOKS_CHANNEL", "").strip()
+BOOKS_CHANNEL = int(_books_channel) if _books_channel else None
+
 # Message ID of a file in the storage channel used for storing database backups
 DATABASE_BACKUP_MSG_ID = int(
     os.getenv("DATABASE_BACKUP_MSG_ID")

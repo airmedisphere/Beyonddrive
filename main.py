@@ -148,6 +148,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to start backup bot: {e}")
 
+    # Load books library (separate from main TGDrive)
+    try:
+        from utils.books import load_books_data, backup_books_data
+        import config as _cfg
+        if _cfg.BOOKS_CHANNEL:
+            load_books_data()
+            asyncio.create_task(backup_books_data())
+            logger.info(f"Books library enabled (channel={_cfg.BOOKS_CHANNEL})")
+        else:
+            logger.info("Books library disabled (BOOKS_CHANNEL not set)")
+    except Exception as e:
+        logger.error(f"Failed to load books library: {e}")
+
     yield
 
 
@@ -1399,6 +1412,10 @@ async def fire_webhooks(event: str, payload: Dict[str, Any]):
 
 from utils.advanced_routes import router as advanced_router
 app.include_router(advanced_router)
+
+# Books library API (completely separate from main TGDrive file browser)
+from utils.books_routes import router as books_router
+app.include_router(books_router)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
