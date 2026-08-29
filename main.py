@@ -150,11 +150,16 @@ async def lifespan(app: FastAPI):
 
     # Load books library (separate from main TGDrive)
     try:
-        from utils.books import load_books_data, backup_books_data
+        from utils.books import load_books_data, backup_books_data, register_books_channel_listener
+        from utils.clients import multi_clients
         import config as _cfg
         if _cfg.BOOKS_CHANNEL:
             load_books_data()
             asyncio.create_task(backup_books_data())
+            # Listen for files posted directly into BOOKS_CHANNEL (outside
+            # the website) so they get auto-registered and show up on the
+            # site too, not just files uploaded through /api/books/upload.
+            register_books_channel_listener(list(multi_clients.values()))
             logger.info(f"Books library enabled (channel={_cfg.BOOKS_CHANNEL})")
         else:
             logger.info("Books library disabled (BOOKS_CHANNEL not set)")
