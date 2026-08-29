@@ -52,16 +52,19 @@ the website uploads).
 
 Base URL = your backend URL, e.g. `https://your-app.onrender.com`
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/books` | List / search books |
-| `GET` | `/api/books/tags` | All unique tags |
-| `GET` | `/api/books/{id}` | Single book metadata |
-| `GET` | `/api/books/{id}/download` | Stream / download the file |
-| `GET` | `/api/books/{id}/stream` | Same as download (alias) |
-| `POST` | `/api/books/upload` | Upload a new book (multipart) |
-| `PATCH` | `/api/books/{id}` | Update metadata |
-| `DELETE` | `/api/books/{id}` | Remove from library |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/api/books` | — | List / search books |
+| `GET` | `/api/books/tags` | — | All unique tags |
+| `GET` | `/api/books/{id}` | — | Single book metadata |
+| `GET` | `/api/books/{id}/download` | — | Stream / download the original file |
+| `GET` | `/api/books/{id}/stream` | — | Same as download (alias) |
+| `GET` | `/api/books/{id}/reader-info` | — | Reader status/format for the in-browser reader |
+| `GET` | `/api/books/{id}/reader-file` | — | Stream the reader-ready version (original or converted) |
+| `POST` | `/api/books/upload` | — | Upload a new book (multipart) |
+| `POST` | `/api/books/admin/verify` | password in body | Check an admin password |
+| `PATCH` | `/api/books/{id}` | `X-Admin-Password` header | Update metadata |
+| `DELETE` | `/api/books/{id}` | `X-Admin-Password` header | Remove from library |
 
 ### Query parameters for `GET /api/books`
 
@@ -83,6 +86,19 @@ curl -X POST https://your-backend.onrender.com/api/books/upload \
   -F "language=en"
 ```
 
+### Admin-protected example (`PATCH` / `DELETE`)
+
+```bash
+curl -X DELETE https://your-backend.onrender.com/api/books/a1b2c3d4e5 \
+  -H "X-Admin-Password: $ADMIN_PASSWORD"
+```
+
+Uses the same `ADMIN_PASSWORD` env var as the rest of the project (defaults
+to `"admin"` if unset — **change it** before going live). The website's
+`/admin` page prompts once for the password (via `POST /api/books/admin/verify`)
+and then sends it back on this header for every edit/delete action; it's
+never persisted server-side beyond that single env var.
+
 ### Response shape (book object)
 
 ```json
@@ -97,9 +113,42 @@ curl -X POST https://your-backend.onrender.com/api/books/upload \
   "message_id": 12345,
   "size": 2457600,
   "uploaded_at": "2026-08-29T10:00:00+00:00",
-  "updated_at": "2026-08-29T10:00:00+00:00"
+  "updated_at": "2026-08-29T10:00:00+00:00",
+  "reader_format": "pdf",
+  "reader_status": "ready",
+  "reader_error": null
 }
 ```
+
+---
+
+## In-browser reader
+
+Every book gets a "Read" option, not just "Download":
+
+- **PDF / EPUB / TXT** — reader-ready immediately, no conversion needed.
+- **MOBI / AZW3** — auto-converted to **EPUB** in the background using
+  Calibre's `ebook-convert` (installed in the Docker image).
+- **DJVU** — auto-converted to **PDF** in the background using
+  `ddjvu` from `djvulibre-bin` (installed in the Docker image).
+
+`reader_status` on a book is one of:
+
+| Value | Meaning |
+|---|---|
+| `ready` | `GET /api/books/{id}/reader-file` will stream a renderable file |
+| `converting` | conversion is running in the background — poll `reader-info` every couple of seconds |
+| `failed` | conversion failed (`reader_error` has details) — fall back to Download |
+| `unsupported` | file type has no reader path at all (shouldn't normally happen given the upload allow-list) |
+
+Conversion runs for both website uploads and files dropped directly into
+`BOOKS_CHANNEL` in Telegram.
+
+**Docker image size note:** Calibre pulls in a lot of dependencies and will
+noticeably increase build time / image size on Render. If you don't need
+MOBI/AZW3/DJVU reader support, remove `calibre djvulibre-bin` from the
+`Dockerfile`'s `apt-get install` line — those formats will just fall back to
+download-only (`reader_status: "unsupported"`) instead of breaking anything.
 
 ---
 
@@ -109,3 +158,4 @@ curl -X POST https://your-backend.onrender.com/api/books/upload \
 - Metadata is stored in `./cache/books.data` and periodically backed up to the same channel.
 - The main TGDrive (`STORAGE_CHANNEL`) is completely unaffected.
 - CORS is already open (`*`) so your Vercel frontend can call these APIs directly.
+- **Change `ADMIN_PASSWORD`** from its default (`"admin"`) before going live — it now gates book editing/deletion too, not just the main drive admin actions.

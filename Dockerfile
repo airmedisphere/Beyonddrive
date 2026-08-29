@@ -6,7 +6,18 @@ WORKDIR /app
 
 # Copy the requirements file to the working directory and install dependencies
 COPY requirements.txt .
-RUN apt-get update && apt-get install -y ffmpeg && pip install --no-cache-dir -r requirements.txt
+# ffmpeg: video transcoding/streaming
+# calibre: converts MOBI/AZW3 -> EPUB for the in-browser book reader
+# djvulibre-bin: converts DJVU -> PDF for the in-browser book reader
+# NOTE: calibre pulls in a lot of dependencies and noticeably increases
+# image size / build time. If you don't need MOBI/AZW3/DJVU reader support,
+# you can drop `calibre djvulibre-bin` from this line and those formats
+# will simply fall back to download-only in the UI.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ffmpeg calibre djvulibre-bin && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code to the working directory
 COPY . .
