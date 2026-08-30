@@ -65,6 +65,40 @@ Base URL = your backend URL, e.g. `https://your-app.onrender.com`
 | `POST` | `/api/books/admin/verify` | password in body | Check an admin password |
 | `PATCH` | `/api/books/{id}` | `X-Admin-Password` header | Update metadata |
 | `DELETE` | `/api/books/{id}` | `X-Admin-Password` header | Remove from library |
+| `GET` | `/api/books/{id}/cover` | — | Stream the book's cover image (404 if none set) |
+| `POST` | `/api/books/{id}/cover` | `X-Admin-Password` header | Upload/replace a cover image (multipart, `file=`) |
+| `POST` | `/api/books/{id}/cover/generate` | `X-Admin-Password` header | Auto-generate a cover for this one book (`?force=true\|false`, default `true`) |
+| `POST` | `/api/books/covers/generate-all` | `X-Admin-Password` header | Auto-generate covers for every book that doesn't have one yet (never overwrites existing covers) |
+
+### Cover images
+
+Every book can have a cover image, stored the same way as the book itself:
+as a document message in `BOOKS_CHANNEL`, referenced by `cover_message_id`
+on the book object. There are two ways to set one:
+
+1. **Upload manually** — `POST /api/books/{id}/cover` with a `file=` field
+   (jpg/jpeg/png/webp). Replaces any existing cover for that book.
+2. **Auto-generate** — `POST /api/books/{id}/cover/generate` renders the
+   book's actual first page as the cover:
+   - PDF / DJVU — the first page is rendered directly.
+   - EPUB / MOBI / AZW3 — the book's embedded cover image is extracted
+     (falling back to a first-page render if it has none).
+   - Anything else (e.g. TXT), or any format whose render attempt fails —
+     falls back to a generated title card (book title + author on a
+     colored background) so the book still ends up with *something*
+     rather than staying coverless.
+
+   By default this endpoint always (re)generates, since clicking
+   "Generate" on one specific book is an explicit request for a new cover.
+   Pass `?force=false` to only generate if the book doesn't have a cover
+   yet.
+
+   `POST /api/books/covers/generate-all` runs the same generation for
+   every book that doesn't have a cover yet, in one call — this one always
+   skips books that already have a cover (manually uploaded or previously
+   generated), so re-running it is always safe and only fills in the gaps.
+
+The frontend can display a cover with a plain `<img src="{API_URL}/api/books/{id}/cover" />` and fall back to a placeholder icon on a 404 (i.e. only render the `<img>` when `book.cover_message_id` is set, or handle `onError`).
 
 ### Query parameters for `GET /api/books`
 
