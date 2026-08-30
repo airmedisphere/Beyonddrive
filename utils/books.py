@@ -660,13 +660,15 @@ async def generate_all_covers() -> Dict[str, Any]:
     todo = [b.id for b in BOOKS_DATA.books.values() if not b.cover_message_id]
     results = {"total_missing": len(todo), "generated": 0, "skipped": 0, "failed": []}
 
-    # Downloads/uploads can run a couple at a time (I/O-bound), but the
-    # actual page-render step inside generate_cover_image() is separately
-    # capped to one-at-a-time (see book_covers._render_semaphore) since
-    # that's the part that can spike memory on large/scanned PDFs. Keeping
-    # this outer limit modest too avoids having several full book files
-    # downloaded to disk at once.
-    semaphore = asyncio.Semaphore(2)
+    # Fully sequential on purpose. The render step is already internally
+    # capped to one-at-a-time (book_covers._render_semaphore), but on a
+    # memory-limited instance (Render free tier is 512MB, shared with
+    # everything else this app is doing — streaming, Pyrogram, etc.) even
+    # a couple of concurrent downloads/uploads was enough headroom loss to
+    # tip things over. One book fully finishing (downloaded, rendered,
+    # uploaded, temp files removed) before the next starts keeps the peak
+    # as low as this feature can go.
+    semaphore = asyncio.Semaphore(1)
 
     async def _one(book_id: str):
         async with semaphore:
@@ -677,6 +679,11 @@ async def generate_all_covers() -> Dict[str, Any]:
                 results["skipped"] += 1
             else:
                 results["failed"].append(book_id)
+            # A brief pause between books gives the event loop a chance to
+            # actually run garbage collection and lets the OS reclaim freed
+            # native buffers (PyMuPDF/Pillow) before the next book starts,
+            # instead of piling straight into the next allocation.
+            await asyncio.sleep(0.3)
 
     await asyncio.gather(*(_one(bid) for bid in todo))
     return results

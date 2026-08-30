@@ -54,6 +54,13 @@ COVER_SIZE = (900, 1200)
 # is already far more than enough detail for a 900x1200 thumbnail.
 MAX_RENDER_DIM = 2000
 
+# Books above this size skip real page-rendering entirely and go straight
+# to a generated title card. Opening/rendering an unusually large source
+# file (huge scanned PDF, etc.) is the single biggest memory risk in this
+# whole feature, and a title card is a perfectly fine cover to fall back
+# to — better than risking the process on a file this size.
+MAX_RENDER_SOURCE_BYTES = 120 * 1024 * 1024  # 120MB
+
 # Only one PyMuPDF render (the actual memory-heavy step) runs at a time,
 # even though several books can be downloaded/uploaded concurrently. This
 # decouples "concurrency for network I/O" from "concurrency for the part
@@ -126,6 +133,15 @@ async def _render_first_page_with_fitz(source_path: str, out_path: Path) -> Tupl
             doc.close()
             del pix, img, doc
             gc.collect()
+            # MuPDF keeps an internal store (decoded fonts/images) that
+            # persists across separate fitz.open() calls *within the same
+            # process* — it isn't tied to any one document and doesn't get
+            # freed just by closing that document. Across a big "generate
+            # all covers" batch this store grows book after book until it
+            # alone can exceed a 512MB instance, even with every single
+            # render individually bounded. Shrinking it after every render
+            # keeps that cache from accumulating across the batch.
+            fitz.TOOLS.store_shrink(100)
 
     try:
         async with _render_semaphore:
@@ -291,7 +307,19 @@ async def generate_cover_image(
     try:
         ok, err = False, "Unsupported format for page rendering"
 
-        if ext == ".pdf":
+        try:
+            source_size = os.path.getsize(source_path)
+        except OSError:
+            source_size = 0
+        too_big = source_size > MAX_RENDER_SOURCE_BYTES
+
+        if too_big:
+            logger.info(
+                f"Source file is {source_size / 1024 / 1024:.0f}MB (over the "
+                f"{MAX_RENDER_SOURCE_BYTES / 1024 / 1024:.0f}MB render cap); "
+                f"skipping page render and using a generated title card"
+            )
+        elif ext == ".pdf":
             ok, err = await _render_first_page_with_fitz(source_path, out_path)
         elif ext in (".epub", ".mobi", ".azw3"):
             ok, err = await _extract_calibre_cover(source_path, out_path)
