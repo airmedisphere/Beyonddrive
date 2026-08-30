@@ -242,17 +242,54 @@ class BooksLibrary:
 BOOKS_DATA: Optional[BooksLibrary] = None
 
 
-def load_books_data() -> BooksLibrary:
+async def load_books_data() -> BooksLibrary:
+    """
+    Restore the books library the same way drive.data is restored:
+    Telegram BOOKS_CHANNEL backup (survives redeploys) first, then the
+    local disk cache (dev convenience only — Render wipes this on every
+    deploy), then a fresh empty library as a last resort.
+    """
     global BOOKS_DATA
+
+    # ── 1. Try restoring from the Telegram backup (BOOKS_DB_MSG_ID) ────────
+    msg_id = getattr(config, "BOOKS_DB_MSG_ID", None)
+    if config.BOOKS_CHANNEL and msg_id:
+        try:
+            client = get_client()
+            msg: Message = await client.get_messages(config.BOOKS_CHANNEL, msg_id)
+            if msg and msg.document and msg.document.file_name == "books.data":
+                dl_path = await msg.download()
+                with open(dl_path, "rb") as f:
+                    BOOKS_DATA = dill.load(f)
+                # Mirror it into the local cache too, so save()/backup
+                # helpers keep working off the same path as before.
+                BOOKS_DATA.save()
+                logger.info(
+                    f"Loaded books library from Telegram backup "
+                    f"({len(BOOKS_DATA.books)} books)"
+                )
+                return BOOKS_DATA
+            else:
+                logger.warning("BOOKS_DB_MSG_ID did not point to a books.data file.")
+        except Exception as e:
+            logger.warning(f"Books Telegram backup load failed: {e}")
+    elif config.BOOKS_CHANNEL and not msg_id:
+        logger.info(
+            "BOOKS_DB_MSG_ID not set yet — books library will be created fresh "
+            "and its backup message ID will be logged for you to save."
+        )
+
+    # ── 2. Fall back to whatever is on local disk (same-boot dev use) ─────
     if books_cache_path.exists():
         try:
             with open(books_cache_path, "rb") as f:
                 BOOKS_DATA = dill.load(f)
-            logger.info(f"Loaded books library ({len(BOOKS_DATA.books)} books)")
+            logger.info(f"Loaded books library from local cache ({len(BOOKS_DATA.books)} books)")
             return BOOKS_DATA
         except Exception as e:
-            logger.error(f"Failed to load books.data: {e}")
+            logger.error(f"Failed to load books.data from local cache: {e}")
 
+    # ── 3. Nothing to restore from — start fresh ───────────────────────────
     BOOKS_DATA = BooksLibrary()
     BOOKS_DATA.save()
     logger.info("Created new empty books library")
@@ -273,7 +310,20 @@ def get_books_data() -> BooksLibrary:
     """
     global BOOKS_DATA
     if BOOKS_DATA is None:
-        load_books_data()
+        # Safety net only: normal startup always awaits load_books_data()
+        # in main.py's lifespan before any request can reach here. If we
+        # ever do land here it means that step was skipped, so fall back
+        # to local disk / a fresh library rather than crashing — we can't
+        # await the Telegram restore from this sync accessor.
+        if books_cache_path.exists():
+            try:
+                with open(books_cache_path, "rb") as f:
+                    BOOKS_DATA = dill.load(f)
+            except Exception as e:
+                logger.error(f"get_books_data: failed to load local cache: {e}")
+        if BOOKS_DATA is None:
+            BOOKS_DATA = BooksLibrary()
+            BOOKS_DATA.save()
     return BOOKS_DATA
 
 
@@ -297,11 +347,12 @@ async def upload_book_to_telegram(
     polls GET /api/books/{id}/reader-info until reader_status flips to
     "ready" (or "failed").
     """
+    global BOOKS_DATA
     if not config.BOOKS_CHANNEL:
         raise RuntimeError("BOOKS_CHANNEL is not configured")
 
     if BOOKS_DATA is None:
-        load_books_data()
+        BOOKS_DATA = get_books_data()
 
     client: Client = get_client()
     ext = Path(filename).suffix.lower()
@@ -506,7 +557,7 @@ def register_books_channel_listener(clients: List[Client]) -> None:
     async def _on_channel_message(client: Client, message: Message):
         global BOOKS_DATA
         if BOOKS_DATA is None:
-            load_books_data()
+            BOOKS_DATA = get_books_data()
 
         # If this message was just sent by upload_book_to_telegram(), it may
         # already be registered (or about to be, a moment before this event
@@ -567,13 +618,14 @@ def register_books_channel_listener(clients: List[Client]) -> None:
 
 async def stream_book(book_id: str, request):
     """Stream a book file from BOOKS_CHANNEL."""
+    global BOOKS_DATA
     from utils.streamer import media_streamer
 
     if not config.BOOKS_CHANNEL:
         raise RuntimeError("BOOKS_CHANNEL is not configured")
 
     if BOOKS_DATA is None:
-        load_books_data()
+        BOOKS_DATA = get_books_data()
 
     book = BOOKS_DATA.get_book(book_id)
     if not book:
@@ -595,13 +647,14 @@ async def stream_reader_file(book_id: str, request):
     Raises FileNotFoundError if the book doesn't exist, and
     RuntimeError("not_ready") if a conversion is still in progress or failed.
     """
+    global BOOKS_DATA
     from utils.streamer import media_streamer
 
     if not config.BOOKS_CHANNEL:
         raise RuntimeError("BOOKS_CHANNEL is not configured")
 
     if BOOKS_DATA is None:
-        load_books_data()
+        BOOKS_DATA = get_books_data()
 
     book = BOOKS_DATA.get_book(book_id)
     if not book:
@@ -671,9 +724,42 @@ async def backup_books_data(loop: bool = True):
                         disable_notification=True,
                     )
                     BOOKS_DATA.backup_message_id = message.id
+                    # Persist the new backup_message_id into the local cache
+                    # file too (save() re-pickles BOOKS_DATA as it stands
+                    # now), so it survives even if the process restarts
+                    # before the *next* backup cycle would have edited it.
+                    BOOKS_DATA.save()
+
+                    if not config.BOOKS_DB_MSG_ID:
+                        logger.warning(
+                            f"books.data sent to BOOKS_CHANNEL for the first time. "
+                            f"Message ID: {message.id} — "
+                            f"Add BOOKS_DB_MSG_ID={message.id} to your Render env vars "
+                            f"so this library survives future deploys."
+                        )
+                    try:
+                        await message.pin()
+                    except Exception:
+                        pass
 
                 BOOKS_DATA.is_updated = False
                 logger.info("Books library backup completed.")
+
+                # Backup books.data to GitHub too, in its own "books/" folder
+                # so it never collides with the main drive.data backup.
+                try:
+                    from utils.github_backup import backup_to_github, is_github_enabled
+                    if is_github_enabled():
+                        asyncio.create_task(
+                            backup_to_github(
+                                str(books_cache_path),
+                                remote_name="books.data",
+                                folder="books",
+                            )
+                        )
+                except Exception as _ge:
+                    logger.error(f"Books GitHub backup error: {_ge}")
+
         except Exception as e:
             logger.error(f"Books backup error: {e}")
 

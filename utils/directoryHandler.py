@@ -479,7 +479,9 @@ async def backup_drive_data(loop=True):
             try:
                 from utils.github_backup import backup_to_github, is_github_enabled
                 if is_github_enabled():
-                    asyncio.create_task(backup_to_github(str(drive_cache_path)))
+                    asyncio.create_task(
+                        backup_to_github(str(drive_cache_path), remote_name="drive.data", folder="")
+                    )
             except Exception as _ge:
                 logger.error(f"GitHub backup error: {_ge}")
 
