@@ -26,6 +26,7 @@ already installed for the reader-conversion feature).
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import os
 import shutil
@@ -43,6 +44,22 @@ COVER_TIMEOUT_SECONDS = 60
 # Roughly a 3:4 book-cover aspect ratio, big enough to look sharp on retina
 # screens but small enough to stay a lightweight Telegram document.
 COVER_SIZE = (900, 1200)
+
+# Hard cap on the raw pixmap PyMuPDF renders before we ever downscale it.
+# Some scanned/oversized-page PDFs have huge embedded page dimensions; a
+# fixed zoom factor applied to those can momentarily allocate a very large
+# in-memory bitmap and OOM-kill the whole process on a memory-limited host
+# (Render free tier is 512MB). Capping the rendered dimension bounds worst-
+# case memory regardless of how big the source page claims to be — 2000px
+# is already far more than enough detail for a 900x1200 thumbnail.
+MAX_RENDER_DIM = 2000
+
+# Only one PyMuPDF render (the actual memory-heavy step) runs at a time,
+# even though several books can be downloaded/uploaded concurrently. This
+# decouples "concurrency for network I/O" from "concurrency for the part
+# that can spike memory" so a burst of downloads doesn't line up with a
+# burst of large renders.
+_render_semaphore = asyncio.Semaphore(1)
 
 
 async def _run(cmd: list) -> Tuple[bool, str]:
@@ -75,7 +92,9 @@ def _save_jpeg_fit(img: Image.Image, out_path: Path) -> None:
 
 async def _render_first_page_with_fitz(source_path: str, out_path: Path) -> Tuple[bool, str]:
     """Render page 1 of a PDF (or EPUB, which PyMuPDF can also open) to a
-    JPEG. Runs the (blocking, C-extension) work in a thread."""
+    JPEG. Runs the (blocking, C-extension) work in a thread, serialized
+    against other renders (see _render_semaphore) and with the raw pixmap
+    dimension capped so an oversized page can't spike memory."""
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -83,19 +102,34 @@ async def _render_first_page_with_fitz(source_path: str, out_path: Path) -> Tupl
 
     def _do():
         doc = fitz.open(source_path)
+        pix = None
+        img = None
         try:
             if doc.page_count == 0:
                 return False, "Document has no pages"
             page = doc.load_page(0)
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), colorspace=fitz.csRGB)
+            rect = page.rect
+            longest_side = max(rect.width, rect.height, 1)
+            # 2x is plenty for normal-sized pages; for abnormally large
+            # embedded page dimensions, scale down so the rendered bitmap
+            # never exceeds MAX_RENDER_DIM on its longest side.
+            zoom = min(2.0, MAX_RENDER_DIM / longest_side)
+            zoom = max(zoom, 0.1)
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), colorspace=fitz.csRGB)
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             _save_jpeg_fit(img, out_path)
             return True, ""
         finally:
+            # Drop references and force collection promptly — these can be
+            # tens of MB each, and PyMuPDF/Pillow hold native buffers that
+            # don't shrink the process's memory footprint until freed.
             doc.close()
+            del pix, img, doc
+            gc.collect()
 
     try:
-        return await asyncio.to_thread(_do)
+        async with _render_semaphore:
+            return await asyncio.to_thread(_do)
     except Exception as e:
         return False, str(e)
 

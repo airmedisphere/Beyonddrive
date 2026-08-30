@@ -660,7 +660,13 @@ async def generate_all_covers() -> Dict[str, Any]:
     todo = [b.id for b in BOOKS_DATA.books.values() if not b.cover_message_id]
     results = {"total_missing": len(todo), "generated": 0, "skipped": 0, "failed": []}
 
-    semaphore = asyncio.Semaphore(3)
+    # Downloads/uploads can run a couple at a time (I/O-bound), but the
+    # actual page-render step inside generate_cover_image() is separately
+    # capped to one-at-a-time (see book_covers._render_semaphore) since
+    # that's the part that can spike memory on large/scanned PDFs. Keeping
+    # this outer limit modest too avoids having several full book files
+    # downloaded to disk at once.
+    semaphore = asyncio.Semaphore(2)
 
     async def _one(book_id: str):
         async with semaphore:
