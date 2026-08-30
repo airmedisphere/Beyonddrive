@@ -22,6 +22,10 @@ from utils.books import (
     upload_book_to_telegram,
     stream_book,
     stream_reader_file,
+    upload_cover_to_telegram,
+    generate_cover_for_book,
+    generate_all_covers,
+    stream_cover,
 )
 
 logger = Logger(__name__)
@@ -99,6 +103,23 @@ async def list_tags():
     return {"status": "ok", "tags": books_data.all_tags()}
 
 
+@router.post("/covers/generate-all")
+async def generate_all_covers_route(_admin: None = Depends(_require_admin)):
+    """
+    Generate covers (first-page render / embedded-cover extraction / title
+    card fallback) for every book that doesn't already have one. Books that
+    already have a cover — manually uploaded or previously generated — are
+    always left alone. Requires admin password.
+    """
+    _ensure_books_enabled()
+    try:
+        summary = await generate_all_covers()
+        return {"status": "ok", **summary}
+    except Exception as e:
+        logger.error(f"Bulk cover generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{book_id}")
 async def get_book(book_id: str):
     """Get a single book by ID."""
@@ -160,6 +181,94 @@ async def get_reader_file(book_id: str, request: Request):
     except Exception as e:
         logger.error(f"Error streaming reader file for {book_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{book_id}/cover")
+async def get_cover(book_id: str, request: Request):
+    """Stream a book's cover image. 404 if no cover has been set yet —
+    the frontend should fall back to a placeholder icon in that case."""
+    _ensure_books_enabled()
+    try:
+        return await stream_cover(book_id, request)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Book not found")
+    except LookupError:
+        raise HTTPException(status_code=404, detail="No cover set for this book")
+    except Exception as e:
+        logger.error(f"Error streaming cover for {book_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{book_id}/cover")
+async def upload_cover(
+    book_id: str,
+    file: UploadFile = File(...),
+    _admin: None = Depends(_require_admin),
+):
+    """
+    Upload a cover image for one book from the admin section. Stored only
+    in BOOKS_CHANNEL (as a document, to avoid Telegram's photo
+    recompression) and attached via cover_message_id. Requires admin
+    password. Replaces any existing cover for this book.
+    """
+    books_data = _ensure_books_enabled()
+    if not books_data.get_book(book_id):
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    filename = file.filename or "cover.jpg"
+    ext = Path(filename).suffix.lower()
+    if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image type: {ext}. Allowed: jpg, jpeg, png, webp",
+        )
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp_path = tmp.name
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                tmp.write(chunk)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save upload: {e}")
+
+    try:
+        book = await upload_cover_to_telegram(book_id, tmp_path, source="upload")
+        return {"status": "ok", "book": book.to_dict()}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Book not found")
+    except Exception as e:
+        logger.error(f"Cover upload failed for {book_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@router.post("/{book_id}/cover/generate")
+async def generate_cover(
+    book_id: str,
+    force: bool = Query(True, description="Regenerate even if a cover already exists"),
+    _admin: None = Depends(_require_admin),
+):
+    """
+    Auto-generate a cover for one book: renders the book's first page
+    (PDF/DJVU), extracts the embedded cover (EPUB/MOBI/AZW3), or falls back
+    to a generated title card — then uploads it to BOOKS_CHANNEL. Requires
+    admin password. Defaults to always (re)generating for this one book;
+    pass force=false to only generate if it doesn't have a cover yet.
+    """
+    _ensure_books_enabled()
+    book, status = await generate_cover_for_book(book_id, force=force)
+    if status == "not_found":
+        raise HTTPException(status_code=404, detail="Book not found")
+    if status == "error":
+        raise HTTPException(status_code=500, detail="Cover generation failed for this book")
+    return {"status": "ok", "result": status, "book": book.to_dict()}
 
 
 @router.post("/upload")

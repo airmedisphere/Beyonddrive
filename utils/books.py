@@ -20,9 +20,10 @@ import os
 import random
 import string
 import asyncio
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import dill
 from pyrogram import Client, filters
@@ -37,6 +38,7 @@ from utils.book_converter import (
     NATIVE_READER_FORMATS,
     convert_book,
 )
+from utils.book_covers import generate_cover_image
 
 # File types accepted both from the website uploader and from manual
 # Telegram uploads picked up by the channel listener.
@@ -470,6 +472,166 @@ async def _convert_and_attach_reader(book_id: str, source_path: str, ext: str) -
             os.remove(source_path)
         except OSError:
             pass
+
+
+async def upload_cover_to_telegram(book_id: str, image_path: str, source: str = "upload") -> Book:
+    """
+    Upload a cover image (manually provided, or freshly generated) to
+    BOOKS_CHANNEL as a document (not a Telegram "photo" — photos get
+    recompressed/resized by Telegram, documents don't) and attach it to
+    the book via cover_message_id.
+    """
+    global BOOKS_DATA
+    if not config.BOOKS_CHANNEL:
+        raise RuntimeError("BOOKS_CHANNEL is not configured")
+    if BOOKS_DATA is None:
+        BOOKS_DATA = get_books_data()
+
+    book = BOOKS_DATA.get_book(book_id)
+    if not book:
+        raise FileNotFoundError("Book not found")
+
+    client: Client = get_client()
+    ext = Path(image_path).suffix.lower() or ".jpg"
+    cover_filename = f"cover_{book.id}{ext}"
+    caption = f"🖼 Cover for: {book.title}" + (" (auto-generated)" if source == "generated" else "")
+
+    message: Message = await client.send_document(
+        config.BOOKS_CHANNEL,
+        image_path,
+        caption=caption[:1024],
+        file_name=cover_filename,
+        disable_notification=True,
+    )
+
+    BOOKS_DATA.update_book(book_id, cover_message_id=message.id)
+    logger.info(f"Cover attached to book {book_id} ({source}), msg={message.id}")
+    return BOOKS_DATA.get_book(book_id)
+
+
+async def generate_cover_for_book(book_id: str, force: bool = True) -> Tuple[Optional[Book], str]:
+    """
+    Auto-generate a cover for one book (renders page 1 for PDF/DJVU,
+    extracts the embedded cover for EPUB/MOBI/AZW3, or falls back to a
+    generated title card) and upload it to BOOKS_CHANNEL.
+
+    If force=False and the book already has a cover, this is a no-op that
+    returns ("skipped", ...) — used by "Generate for all" so it never
+    overwrites covers you already set (manually or previously generated).
+    force=True (the default, used by the per-book "Generate" button) always
+    (re)generates, since clicking Generate on one specific book is an
+    explicit request for a new cover.
+
+    Returns (book_or_None, status) where status is one of:
+    "generated", "skipped", "not_found", "error".
+    """
+    global BOOKS_DATA
+    if BOOKS_DATA is None:
+        BOOKS_DATA = get_books_data()
+
+    book = BOOKS_DATA.get_book(book_id)
+    if not book:
+        return None, "not_found"
+
+    if not force and book.cover_message_id:
+        return book, "skipped"
+
+    ext = Path(book.filename).suffix.lower()
+    download_path = None
+    cover_path = None
+    try:
+        download_path = await _download_book_source_message(book)
+        cover_path, err = await generate_cover_image(
+            download_path, ext, title=book.title, author=book.author
+        )
+        if not cover_path:
+            logger.error(f"Cover generation failed for book {book_id}: {err}")
+            return book, "error"
+
+        updated = await upload_cover_to_telegram(book_id, cover_path, source="generated")
+        return updated, "generated"
+    except Exception as e:
+        logger.error(f"Cover generation crashed for book {book_id}: {e}")
+        return book, "error"
+    finally:
+        for p in (download_path, cover_path):
+            if p:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+
+async def _download_book_source_message(book: Book) -> str:
+    """Download a book's original file from BOOKS_CHANNEL to a temp path
+    (preserving its extension), for feeding to a local render tool.
+    Caller must delete the returned path when done."""
+    client: Client = get_client()
+    message: Message = await client.get_messages(config.BOOKS_CHANNEL, book.message_id)
+    if not message:
+        raise RuntimeError("Original book message not found in BOOKS_CHANNEL")
+
+    ext = Path(book.filename).suffix.lower() or ".bin"
+    fd, download_path = tempfile.mkstemp(suffix=ext)
+    os.close(fd)
+    await client.download_media(message, file_name=download_path)
+    return download_path
+
+
+async def generate_all_covers() -> Dict[str, Any]:
+    """
+    Generate covers for every book that doesn't already have one.
+    Existing covers (manually uploaded or previously generated) are always
+    left untouched — this only fills in the gaps. Runs with a small
+    concurrency limit so it doesn't hammer Telegram/the conversion tools
+    when the library is large.
+    """
+    global BOOKS_DATA
+    if BOOKS_DATA is None:
+        BOOKS_DATA = get_books_data()
+
+    todo = [b.id for b in BOOKS_DATA.books.values() if not b.cover_message_id]
+    results = {"total_missing": len(todo), "generated": 0, "skipped": 0, "failed": []}
+
+    semaphore = asyncio.Semaphore(3)
+
+    async def _one(book_id: str):
+        async with semaphore:
+            _, status = await generate_cover_for_book(book_id, force=False)
+            if status == "generated":
+                results["generated"] += 1
+            elif status == "skipped":
+                results["skipped"] += 1
+            else:
+                results["failed"].append(book_id)
+
+    await asyncio.gather(*(_one(bid) for bid in todo))
+    return results
+
+
+async def stream_cover(book_id: str, request):
+    """Stream a book's cover image from BOOKS_CHANNEL."""
+    global BOOKS_DATA
+    from utils.streamer import media_streamer
+
+    if not config.BOOKS_CHANNEL:
+        raise RuntimeError("BOOKS_CHANNEL is not configured")
+    if BOOKS_DATA is None:
+        BOOKS_DATA = get_books_data()
+
+    book = BOOKS_DATA.get_book(book_id)
+    if not book:
+        raise FileNotFoundError("Book not found")
+    if not book.cover_message_id:
+        raise LookupError("No cover set for this book")
+
+    cover_filename = f"cover_{book.id}.jpg"
+    return await media_streamer(
+        config.BOOKS_CHANNEL,
+        book.cover_message_id,
+        cover_filename,
+        request,
+    )
 
 
 def _book_from_channel_message(message: Message) -> Optional[Book]:
