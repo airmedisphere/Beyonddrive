@@ -154,7 +154,7 @@ async def lifespan(app: FastAPI):
         from utils.clients import multi_clients
         import config as _cfg
         if _cfg.BOOKS_CHANNEL:
-            load_books_data()
+            await load_books_data()
             asyncio.create_task(backup_books_data())
             # Listen for files posted directly into BOOKS_CHANNEL (outside
             # the website) so they get auto-registered and show up on the

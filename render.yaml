@@ -24,3 +24,9 @@ services:
         sync: false
       - key: DATABASE_BACKUP_MSG_ID
         sync: false
+      - key: BOOKS_DB_MSG_ID
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        sync: false

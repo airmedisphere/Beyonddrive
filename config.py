@@ -27,6 +27,13 @@ STORAGE_CHANNEL = int(os.getenv("STORAGE_CHANNEL"))  # Your storage channel's ch
 _books_channel = os.getenv("BOOKS_CHANNEL", "").strip()
 BOOKS_CHANNEL = int(_books_channel) if _books_channel else None
 
+# Message ID of the books.data backup file inside BOOKS_CHANNEL.
+# Same idea as DATABASE_BACKUP_MSG_ID but for the books library metadata.
+# Leave empty on first deploy — it will be created automatically and logged
+# so you can copy it into your Render env vars (see README_SETUP.md).
+_books_db_msg = os.getenv("BOOKS_DB_MSG_ID", "").strip()
+BOOKS_DB_MSG_ID = int(_books_db_msg) if _books_db_msg else None
+
 # Message ID of a file in the storage channel used for storing database backups
 DATABASE_BACKUP_MSG_ID = int(
     os.getenv("DATABASE_BACKUP_MSG_ID")
