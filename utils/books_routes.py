@@ -103,6 +103,28 @@ async def list_tags():
     return {"status": "ok", "tags": books_data.all_tags()}
 
 
+@router.get("/admin/backup-status")
+async def backup_status(_admin: None = Depends(_require_admin)):
+    """
+    Diagnostic: shows whether the books library's Telegram backup is
+    configured to survive a redeploy, without needing to read Render logs.
+    - backup_message_id: the message in BOOKS_CHANNEL holding books.data
+      right now (None if nothing has been backed up yet).
+    - books_db_msg_id_env: whether BOOKS_DB_MSG_ID is set in the environment.
+    If backup_message_id is set but books_db_msg_id_env is false, the
+    library still survives redeploys (auto-discovered via the pinned
+    message), but setting BOOKS_DB_MSG_ID to that value skips the lookup.
+    """
+    books_data = _ensure_books_enabled()
+    return {
+        "status": "ok",
+        "book_count": len(books_data.books),
+        "backup_message_id": getattr(books_data, "backup_message_id", None),
+        "books_db_msg_id_env": bool(getattr(config, "BOOKS_DB_MSG_ID", None)),
+        "books_channel_configured": bool(config.BOOKS_CHANNEL),
+    }
+
+
 @router.post("/covers/generate-all")
 async def generate_all_covers_route(_admin: None = Depends(_require_admin)):
     """

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 import dill
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.handlers import MessageHandler
 from pyrogram.types import Message
 
@@ -244,44 +244,111 @@ class BooksLibrary:
 BOOKS_DATA: Optional[BooksLibrary] = None
 
 
+async def _load_books_data_from_message(client: Client, msg: Message) -> Optional["BooksLibrary"]:
+    """Given a Telegram message, download+unpickle it as a books.data file.
+    Returns None (and logs) if the message doesn't actually hold one."""
+    if not (msg and msg.document and msg.document.file_name == "books.data"):
+        return None
+    dl_path = await msg.download()
+    with open(dl_path, "rb") as f:
+        data = dill.load(f)
+    # Make sure future backups know which message to edit, even if this
+    # was discovered rather than read from config.
+    data.backup_message_id = msg.id
+    return data
+
+
+async def _discover_books_backup_message(client: Client) -> Optional[Message]:
+    """
+    Find the books.data backup message in BOOKS_CHANNEL without relying on
+    BOOKS_DB_MSG_ID being set. backup_books_data() always pins whichever
+    message currently holds the backup, so the pinned message is the fast
+    path. If pinning ever failed (or got overridden), fall back to scanning
+    recent channel history for a "books.data" document, newest first.
+    """
+    # ── Fast path: the pinned message ──────────────────────────────────
+    try:
+        chat = await client.get_chat(config.BOOKS_CHANNEL)
+        pinned = getattr(chat, "pinned_message", None)
+        if pinned and pinned.document and pinned.document.file_name == "books.data":
+            return pinned
+    except Exception as e:
+        logger.warning(f"Could not check pinned message in BOOKS_CHANNEL: {e}")
+
+    # ── Slow path: scan recent history for the backup document ─────────
+    try:
+        async for msg in client.search_messages(
+            config.BOOKS_CHANNEL, filter=enums.MessagesFilter.DOCUMENT
+        ):
+            if msg.document and msg.document.file_name == "books.data":
+                return msg
+    except Exception as e:
+        logger.warning(f"Could not search BOOKS_CHANNEL history for books.data: {e}")
+
+    return None
+
+
 async def load_books_data() -> BooksLibrary:
     """
     Restore the books library the same way drive.data is restored:
     Telegram BOOKS_CHANNEL backup (survives redeploys) first, then the
     local disk cache (dev convenience only — Render wipes this on every
     deploy), then a fresh empty library as a last resort.
+
+    Unlike the main drive (which requires DATABASE_BACKUP_MSG_ID to be set
+    up front), BOOKS_DB_MSG_ID is optional: if it's missing or stale we
+    auto-discover the current backup message from BOOKS_CHANNEL itself
+    (pinned message, or a history search as a fallback) so the library
+    survives redeploys even when nobody copied the message ID into env
+    vars. This is the fix for books data getting wiped on redeploy while
+    the main storage (which always had its ID set) kept working.
     """
     global BOOKS_DATA
 
-    # ── 1. Try restoring from the Telegram backup (BOOKS_DB_MSG_ID) ────────
+    if not config.BOOKS_CHANNEL:
+        BOOKS_DATA = BooksLibrary()
+        BOOKS_DATA.save()
+        logger.info("Books library disabled (BOOKS_CHANNEL not set)")
+        return BOOKS_DATA
+
+    client = get_client()
+
+    # ── 1. Try the explicit BOOKS_DB_MSG_ID, if set ─────────────────────
     msg_id = getattr(config, "BOOKS_DB_MSG_ID", None)
-    if config.BOOKS_CHANNEL and msg_id:
+    if msg_id:
         try:
-            client = get_client()
             msg: Message = await client.get_messages(config.BOOKS_CHANNEL, msg_id)
-            if msg and msg.document and msg.document.file_name == "books.data":
-                dl_path = await msg.download()
-                with open(dl_path, "rb") as f:
-                    BOOKS_DATA = dill.load(f)
-                # Mirror it into the local cache too, so save()/backup
-                # helpers keep working off the same path as before.
+            loaded = await _load_books_data_from_message(client, msg)
+            if loaded:
+                BOOKS_DATA = loaded
                 BOOKS_DATA.save()
                 logger.info(
-                    f"Loaded books library from Telegram backup "
+                    f"Loaded books library from Telegram backup via BOOKS_DB_MSG_ID "
                     f"({len(BOOKS_DATA.books)} books)"
                 )
                 return BOOKS_DATA
-            else:
-                logger.warning("BOOKS_DB_MSG_ID did not point to a books.data file.")
+            logger.warning("BOOKS_DB_MSG_ID did not point to a books.data file.")
         except Exception as e:
-            logger.warning(f"Books Telegram backup load failed: {e}")
-    elif config.BOOKS_CHANNEL and not msg_id:
-        logger.info(
-            "BOOKS_DB_MSG_ID not set yet — books library will be created fresh "
-            "and its backup message ID will be logged for you to save."
-        )
+            logger.warning(f"Books Telegram backup load via BOOKS_DB_MSG_ID failed: {e}")
 
-    # ── 2. Fall back to whatever is on local disk (same-boot dev use) ─────
+    # ── 2. Auto-discover the backup message (no env var needed) ────────
+    try:
+        discovered = await _discover_books_backup_message(client)
+        if discovered:
+            loaded = await _load_books_data_from_message(client, discovered)
+            if loaded:
+                BOOKS_DATA = loaded
+                BOOKS_DATA.save()
+                logger.info(
+                    f"Loaded books library by auto-discovering backup message "
+                    f"{discovered.id} in BOOKS_CHANNEL ({len(BOOKS_DATA.books)} books). "
+                    f"Optionally set BOOKS_DB_MSG_ID={discovered.id} to skip the lookup."
+                )
+                return BOOKS_DATA
+    except Exception as e:
+        logger.warning(f"Books auto-discovery failed: {e}")
+
+    # ── 3. Fall back to whatever is on local disk (same-boot dev use) ──
     if books_cache_path.exists():
         try:
             with open(books_cache_path, "rb") as f:
@@ -291,7 +358,7 @@ async def load_books_data() -> BooksLibrary:
         except Exception as e:
             logger.error(f"Failed to load books.data from local cache: {e}")
 
-    # ── 3. Nothing to restore from — start fresh ───────────────────────────
+    # ── 4. Nothing to restore from — start fresh ────────────────────────
     BOOKS_DATA = BooksLibrary()
     BOOKS_DATA.save()
     logger.info("Created new empty books library")
@@ -901,8 +968,11 @@ async def backup_books_data(loop: bool = True):
                         )
                     try:
                         await message.pin()
-                    except Exception:
-                        pass
+                    except Exception as pin_e:
+                        # Not fatal — load_books_data() also falls back to a
+                        # history search if the pinned message can't be
+                        # found, but pinning is what makes that lookup fast.
+                        logger.warning(f"Could not pin books backup message: {pin_e}")
 
                 BOOKS_DATA.is_updated = False
                 logger.info("Books library backup completed.")
