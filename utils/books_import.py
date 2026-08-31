@@ -88,6 +88,16 @@ MAX_PROGRESS_ENTRIES = 12
 
 # ── Tuning ──────────────────────────────────────────────────────────────────
 SCAN_BATCH_SIZE = 200      # ids per get_messages call (Pyrogram/TG max)
+# Extra ids scanned above the last id the probe found. The probe samples rather
+# than reading every id, so this is the cheap insurance against a book posted
+# right at the top of the channel being missed.
+PROBE_PAD = 60
+# How far out to keep looking before accepting that a channel has nothing
+# readable in it. Only reached when no message at all has been found, which
+# means either an empty channel or one whose entire early history was deleted.
+PROBE_BLIND_CEILING = 1 << 17   # ~131k ids, ~20 probe calls to reach
+# Hard stop for the doubling search, so a pathological channel can't spin.
+PROBE_MAX_ID = 1 << 22     # ~4.2M messages, far beyond any real channel
 FORWARD_BATCH_SIZE = 100   # ids per forward_messages call (TG hard max)
 INTER_BATCH_DELAY = 2.5    # seconds between forward batches, avoids flood wait
 FLOOD_WAIT_CAP = 35        # never sleep longer than this on a FLOOD_WAIT
@@ -124,6 +134,55 @@ def _parse_flood_wait(err_str: str) -> int:
         return min(int(err_str.split("_")[-1]), FLOOD_WAIT_CAP)
     except Exception:
         return FLOOD_WAIT_CAP
+
+
+def _explain_error(exc: Exception) -> str:
+    """
+    Turn a raw Telegram error into something a human can act on.
+
+    The raw text is kept on the end, because when the hint is wrong the error
+    code is the only thing that helps.
+    """
+    raw = str(exc)
+    hints = [
+        (
+            "BOT_METHOD_INVALID",
+            "Telegram blocks bots from reading channel history. Either add a "
+            "user session (STRING_SESSIONS) or import an explicit message id "
+            "range instead of the whole channel.",
+        ),
+        (
+            "CHANNEL_PRIVATE",
+            "The bot cannot see this channel. Add it as a member (an admin of "
+            "the channel has to do that — a bot cannot join on its own).",
+        ),
+        (
+            "CHANNEL_INVALID",
+            "That channel could not be resolved. Check the @username, or use "
+            "the -100… id.",
+        ),
+        (
+            "USERNAME_NOT_OCCUPIED",
+            "No channel with that username exists.",
+        ),
+        (
+            "CHAT_FORWARDS_RESTRICTED",
+            "This channel has forwarding disabled, so its files cannot be "
+            "copied out of it at all.",
+        ),
+        (
+            "CHAT_WRITE_FORBIDDEN",
+            "The bot cannot post into BOOKS_CHANNEL. Make it an admin there.",
+        ),
+        (
+            "MSG_ID_INVALID",
+            "The message id range does not match this channel.",
+        ),
+    ]
+    for needle, hint in hints:
+        if needle in raw:
+            return f"{hint} (Telegram said: {needle})"
+    return raw
 
 
 def _prune_progress() -> None:
@@ -258,6 +317,167 @@ class BooksImportManager:
                     False,
                 )
         return True, channel, is_admin
+
+    @staticmethod
+    def _user_client() -> Optional[Client]:
+        """
+        A logged-in user session from config.STRING_SESSIONS, if there is one.
+
+        Imported lazily: utils.clients imports utils.directoryHandler, and
+        importing it at module scope here would drag the whole drive side of
+        the app into the books path (and risk an import cycle).
+        """
+        try:
+            from utils.clients import premium_clients
+
+            for client in premium_clients.values():
+                return client
+        except Exception:  # pragma: no cover - clients not initialised yet
+            pass
+        return None
+
+    async def _any_of_ids(
+        self, client: Client, channel_id: int, ids: List[int]
+    ) -> bool:
+        """True if any of these message ids exists. One get_messages call."""
+        if not ids:
+            return False
+        try:
+            raw = await client.get_messages(channel_id, ids)
+        except Exception as e:
+            err = str(e)
+            if "FLOOD_WAIT" in err:
+                await asyncio.sleep(_parse_flood_wait(err))
+                raw = await client.get_messages(channel_id, ids)
+            else:
+                raise
+        msgs = raw if isinstance(raw, list) else [raw]
+        # Pyrogram returns a Message with empty=True for ids that don't exist
+        # (never posted, or deleted) rather than omitting them from the list.
+        return any(m is not None and not getattr(m, "empty", False) for m in msgs)
+
+    async def _range_has_message(
+        self, client: Client, channel_id: int, lo: int, hi: int
+    ) -> bool:
+        """
+        Is there any message in [lo, hi]? Two get_messages calls at worst.
+
+        Telegram hands out message ids sequentially within a channel, so if the
+        channel reaches `lo` at all then the ids immediately above `lo` almost
+        certainly exist. That makes a dense block at the bottom of the range the
+        highest-yield probe. Only if that comes back empty is it worth sampling
+        across the rest, which is what stops a run of deleted messages from
+        looking like the end of the channel.
+        """
+        if hi < lo:
+            return False
+
+        block_hi = min(hi, lo + SCAN_BATCH_SIZE - 1)
+        if await self._any_of_ids(
+            client, channel_id, list(range(lo, block_hi + 1))
+        ):
+            return True
+        if block_hi >= hi:
+            return False
+
+        # Spread SCAN_BATCH_SIZE probes evenly over what's left.
+        span = hi - block_hi
+        step = max(1, span // SCAN_BATCH_SIZE)
+        sampled = list(range(block_hi + 1, hi + 1, step))[:SCAN_BATCH_SIZE]
+        return await self._any_of_ids(client, channel_id, sampled)
+
+    async def _find_last_message_id(self, client: Client, channel_id: int) -> int:
+        """
+        Newest message id in a channel, found without reading history.
+
+        messages.GetHistory is a user-only method — a bot calling it gets back
+        BOT_METHOD_INVALID — but fetching messages *by id* is allowed. So this
+        doubles an upper bound until it clears the end of the channel, then
+        binary-searches for the exact last id. Both halves cost O(log) probes:
+        about 20-40 get_messages calls for a channel of any realistic size,
+        against one call per 200 ids for the scan that follows.
+
+        Returns 0 for a channel with nothing readable in it.
+        """
+        # Phase 1: an upper bound. Each step asks "is there anything in the band
+        # just above the current bound?" and doubles if so. Until the first
+        # message turns up the search keeps climbing regardless, because a
+        # channel whose early history was deleted starts with a long empty run
+        # and stopping at the first empty band would call it empty.
+        bound = SCAN_BATCH_SIZE
+        seen = await self._range_has_message(client, channel_id, 1, bound)
+        while bound < PROBE_MAX_ID:
+            if await self._range_has_message(
+                client, channel_id, bound + 1, bound * 2
+            ):
+                seen = True
+                bound *= 2
+                continue
+            if seen:
+                break
+            if bound >= PROBE_BLIND_CEILING:
+                return 0
+            bound *= 2
+        if not seen:
+            return 0
+
+        # Phase 2: the exact last id. Predicate is "something exists at or
+        # above mid", which is monotone, so a plain binary search lands on it.
+        lo, hi = 0, bound
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if await self._range_has_message(client, channel_id, mid, bound):
+                lo = mid
+            else:
+                hi = mid - 1
+
+        if lo <= 0:
+            return 0
+        # Small pad on top. The probe is sampled rather than exhaustive, so the
+        # very newest messages could in principle sit just above what it found;
+        # PROBE_PAD extra ids cost one more batch in the scan and mean a fresh
+        # upload never gets silently left behind.
+        return lo + PROBE_PAD
+
+    async def _discover_message_ids(
+        self, client: Client, channel_id: int, import_id: str
+    ) -> List[int]:
+        """
+        Every candidate message id in a channel, oldest first, when the caller
+        gave no explicit range.
+
+        Prefers a user session (it can read history, so it only returns ids
+        that really exist). Falls back to id probing with the bot, which
+        returns a dense 1..last range — the extra ids cost nothing beyond a few
+        more batched get_messages calls in _scan_media, which has to fetch
+        every id anyway to read filenames.
+        """
+        progress = IMPORT_PROGRESS[import_id]
+        user_client = self._user_client()
+
+        if user_client is not None:
+            try:
+                msg_ids: List[int] = []
+                async for msg in user_client.get_chat_history(channel_id):
+                    if _media(msg):
+                        msg_ids.append(msg.id)
+                    if import_id in IMPORT_CANCEL:
+                        break
+                msg_ids.reverse()  # oldest first, so ids stay in posting order
+                progress["scan_method"] = "history"
+                return msg_ids
+            except Exception as e:
+                logger.warning(
+                    f"History scan via user session failed ({e}); "
+                    "falling back to id probing"
+                )
+
+        last_id = await self._find_last_message_id(client, channel_id)
+        progress["scan_method"] = "probe"
+        progress["last_message_id"] = last_id
+        if last_id <= 0:
+            return []
+        return list(range(1, last_id + 1))
 
     async def _scan_media(
         self,
@@ -569,13 +789,22 @@ class BooksImportManager:
                 msg_ids = list(range(start_msg_id, end_msg_id + 1))
             else:
                 progress["status"] = "scanning"
-                msg_ids = []
-                async for msg in client.get_chat_history(channel_id):
-                    if _media(msg):
-                        msg_ids.append(msg.id)
-                    if import_id in IMPORT_CANCEL:
-                        break
-                msg_ids.reverse()  # oldest first, so ids stay in posting order
+                msg_ids = await self._discover_message_ids(
+                    client, channel_id, import_id
+                )
+                if not msg_ids:
+                    progress.update(
+                        {
+                            "status": "error",
+                            "error_msg": (
+                                "Could not find any messages in this channel. "
+                                "Give an explicit message id range instead "
+                                "(open the first and last book in Telegram, "
+                                "copy their links, and use those)."
+                            ),
+                        }
+                    )
+                    return progress
 
             progress.update({"total_scan": len(msg_ids), "status": "fetching"})
 
@@ -626,7 +855,7 @@ class BooksImportManager:
 
         except Exception as e:
             logger.error(f"[BooksImport] import {import_id} crashed: {e}")
-            progress.update({"status": "error", "error_msg": str(e)})
+            progress.update({"status": "error", "error_msg": _explain_error(e)})
             return progress
         finally:
             IMPORT_CANCEL.discard(import_id)
