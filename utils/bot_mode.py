@@ -802,6 +802,13 @@ def _format_books_import_status(progress: dict) -> str:
 
     lines.append(f"**Imported: {progress.get('imported', 0)}**")
 
+    if progress.get("import_method") == "forward-first":
+        lines.append(
+            "\n_This channel's messages can't be read by the bot, so files are "
+            "being forwarded first and sorted afterwards. Slightly slower, same "
+            "result._"
+        )
+
     if progress.get("enrich_total"):
         lines.append(
             f"Enriched: {progress.get('enrich_done', 0)}/{progress['enrich_total']}"

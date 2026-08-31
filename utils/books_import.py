@@ -100,6 +100,29 @@ PROBE_BLIND_CEILING = 1 << 17   # ~131k ids, ~20 probe calls to reach
 PROBE_MAX_ID = 1 << 22     # ~4.2M messages, far beyond any real channel
 FORWARD_BATCH_SIZE = 100   # ids per forward_messages call (TG hard max)
 INTER_BATCH_DELAY = 2.5    # seconds between forward batches, avoids flood wait
+# ── Forward-first walk ──────────────────────────────────────────────────────
+# Used when the bot can forward out of the source channel but cannot read it.
+# There is no way to ask "how far does this channel go" without reading, so the
+# walk climbs from id 1 and stops after this many consecutive blocks that
+# forwarded nothing (FORWARD_SCAN_EMPTY_STREAK * FORWARD_BATCH_SIZE ids of
+# silence).
+FORWARD_SCAN_EMPTY_STREAK = 30
+# ...but only once something has been found. A channel whose early history was
+# deleted starts with a long empty stretch, so keep looking this far before
+# accepting that there is nothing to import at all.
+FORWARD_SCAN_BLIND_CEILING = 5_000
+# Forward failures that will not improve on retry and are not about a single
+# message: the source refuses forwarding, or the bot cannot post into
+# BOOKS_CHANNEL. Fail the import with a real explanation rather than grinding
+# through every remaining batch.
+FATAL_FORWARD_MARKERS = (
+    "FORWARDS_RESTRICTED",
+    "CHAT_WRITE_FORBIDDEN",
+    "CHAT_SEND_MEDIA_FORBIDDEN",
+    "CHAT_ADMIN_REQUIRED",
+    "CHANNEL_PRIVATE",
+    "USER_BANNED_IN_CHANNEL",
+)
 FLOOD_WAIT_CAP = 35        # never sleep longer than this on a FLOOD_WAIT
 
 # Phase B pacing. A pause between books is not politeness — it is what lets
@@ -336,22 +359,83 @@ class BooksImportManager:
             pass
         return None
 
+    # Exceptions that mean "the installed Pyrogram build could not turn this
+    # message into a Message object", as opposed to "Telegram refused the
+    # request". The fork on requirements.txt is an unpinned dev branch and its
+    # service-message parsing raises UnboundLocalError on some message types
+    # (e.g. cannot access local variable 'community_chat_joined'), which is
+    # fatal for a whole 200-id batch even though only one message is bad.
+    # These are worth isolating and skipping; an RPC error is not, because it
+    # applies to the entire request and bisecting it would just multiply it.
+    _PARSE_ERRORS = (
+        NameError,        # UnboundLocalError is a subclass
+        AttributeError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+    )
+
+    async def _fetch_messages(
+        self,
+        client: Client,
+        channel_id: int,
+        ids: List[int],
+        progress: Optional[Dict[str, Any]] = None,
+    ) -> List[Any]:
+        """
+        get_messages() for a batch of ids, tolerant of individual messages the
+        client library cannot parse.
+
+        A parse failure is isolated by halving the batch until the offending id
+        is alone, then skipping just that one — about 8 extra calls per bad
+        message on a 200-id batch, paid once. Telegram RPC errors are re-raised
+        instead: they describe the request, not a message, so the caller should
+        deal with them.
+        """
+        if not ids:
+            return []
+
+        for attempt in range(3):
+            try:
+                raw = await client.get_messages(channel_id, ids)
+                return raw if isinstance(raw, list) else [raw]
+            except self._PARSE_ERRORS as e:
+                if len(ids) == 1:
+                    logger.warning(
+                        f"[BooksImport] message {ids[0]} is unreadable by the "
+                        f"installed Pyrogram build, skipping it: {e!r}"
+                    )
+                    if progress is not None:
+                        progress["skipped_unreadable"] = (
+                            progress.get("skipped_unreadable", 0) + 1
+                        )
+                    return []
+                half = len(ids) // 2
+                return (
+                    await self._fetch_messages(
+                        client, channel_id, ids[:half], progress
+                    )
+                    + await self._fetch_messages(
+                        client, channel_id, ids[half:], progress
+                    )
+                )
+            except Exception as e:
+                err = str(e)
+                if "FLOOD_WAIT" in err and attempt < 2:
+                    await asyncio.sleep(_parse_flood_wait(err))
+                    continue
+                raise
+
+        return []
+
     async def _any_of_ids(
         self, client: Client, channel_id: int, ids: List[int]
     ) -> bool:
         """True if any of these message ids exists. One get_messages call."""
         if not ids:
             return False
-        try:
-            raw = await client.get_messages(channel_id, ids)
-        except Exception as e:
-            err = str(e)
-            if "FLOOD_WAIT" in err:
-                await asyncio.sleep(_parse_flood_wait(err))
-                raw = await client.get_messages(channel_id, ids)
-            else:
-                raise
-        msgs = raw if isinstance(raw, list) else [raw]
+        msgs = await self._fetch_messages(client, channel_id, ids)
         # Pyrogram returns a Message with empty=True for ids that don't exist
         # (never posted, or deleted) rather than omitting them from the list.
         return any(m is not None and not getattr(m, "empty", False) for m in msgs)
@@ -508,8 +592,9 @@ class BooksImportManager:
 
             for attempt in range(3):
                 try:
-                    raw = await client.get_messages(channel_id, batch)
-                    msgs = raw if isinstance(raw, list) else [raw]
+                    msgs = await self._fetch_messages(
+                        client, channel_id, batch, progress
+                    )
                     break
                 except Exception as e:
                     err = str(e)
@@ -657,6 +742,19 @@ class BooksImportManager:
                     )
                     break
 
+                except self._PARSE_ERRORS as e:
+                    # The forward itself already happened server-side; this
+                    # blew up turning the response into Message objects. Do NOT
+                    # retry — that would forward the same files a second time
+                    # and leave the first copies orphaned in BOOKS_CHANNEL.
+                    logger.error(
+                        f"[BooksImport] batch {batch_num + 1} forwarded but the "
+                        f"response could not be parsed ({e!r}); the files are in "
+                        "BOOKS_CHANNEL and the channel listener will pick them up"
+                    )
+                    progress["errors"] += len(batch_ids)
+                    break
+
                 except Exception as e:
                     err = str(e)
                     if "FLOOD_WAIT" in err:
@@ -677,6 +775,211 @@ class BooksImportManager:
             progress["batches_done"] = batch_num + 1
             if batch_num < total_batches - 1 and import_id not in IMPORT_CANCEL:
                 await asyncio.sleep(INTER_BATCH_DELAY)
+
+        return new_book_ids
+
+    async def _reads_work(
+        self, client: Client, channel_id: int, msg_ids: List[int]
+    ) -> bool:
+        """
+        Can this client actually read messages out of the source channel?
+
+        A bot is allowed to `get_chat` a public channel and to forward out of
+        it without being a member, but reading that channel's messages *by id*
+        is a separate permission it often does not have — Telegram just hands
+        back empty Message objects. Every read-based step then quietly produces
+        nothing: the extension filter sees no filenames, the duplicate check has
+        nothing to compare, the id probe finds no last message. The result is an
+        import that reports zero books and no error, which is exactly what the
+        courses importer avoids by never reading the source when it is given a
+        range. One probe up front decides which half of this module can run.
+        """
+        if not msg_ids:
+            return False
+        return await self._range_has_message(
+            client, channel_id, msg_ids[0], msg_ids[-1]
+        )
+
+    async def _forward_batch(
+        self, client: Client, channel_id: int, batch_ids: List[int]
+    ) -> List[Any]:
+        """
+        Forward up to FORWARD_BATCH_SIZE source ids into BOOKS_CHANNEL.
+
+        Ids that do not exist are skipped server-side rather than refused, and a
+        block where none of them exist comes back as MESSAGE_IDS_EMPTY — an
+        ordinary "nothing here", not a failure. Parse errors are re-raised
+        untouched: the forward has already happened by then, so the caller has
+        to decide what to do rather than have this retry it.
+        """
+        for attempt in range(5):
+            try:
+                forwarded = await client.forward_messages(
+                    chat_id=config.BOOKS_CHANNEL,
+                    from_chat_id=channel_id,
+                    message_ids=batch_ids,
+                    hide_sender_name=True,
+                    disable_notification=True,
+                )
+                if not isinstance(forwarded, list):
+                    forwarded = [forwarded] if forwarded else []
+                return [m for m in forwarded if m]
+            except self._PARSE_ERRORS:
+                raise
+            except Exception as e:
+                err = str(e)
+                if "MESSAGE_IDS_EMPTY" in err or "MESSAGE_ID_INVALID" in err:
+                    return []
+                if any(k in err for k in FATAL_FORWARD_MARKERS):
+                    raise
+                if "FLOOD_WAIT" in err:
+                    await asyncio.sleep(_parse_flood_wait(err))
+                    continue
+                if attempt < 4:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise
+        return []
+
+    async def _delete_forwards(self, client: Client, ids: List[int]) -> None:
+        """
+        Remove copies that were forwarded and then rejected.
+
+        Forward-first means the "is this a book, do we already have it" decision
+        can only happen once the copy exists, so deleting it again is what keeps
+        BOOKS_CHANNEL free of messages nothing references. These are the bot's
+        own messages, so no extra right is needed; a failure here is logged and
+        ignored, because an unreferenced message is untidy rather than harmful.
+        """
+        if not ids:
+            return
+        try:
+            await client.delete_messages(config.BOOKS_CHANNEL, ids)
+        except Exception as e:
+            logger.warning(
+                f"[BooksImport] could not delete {len(ids)} rejected forward(s) "
+                f"from BOOKS_CHANNEL: {e}"
+            )
+
+    async def _forward_first(
+        self,
+        client: Client,
+        channel_id: int,
+        channel_label: str,
+        import_id: str,
+        msg_ids: Optional[List[int]] = None,
+        skip_duplicates: bool = True,
+    ) -> List[str]:
+        """
+        Import without reading the source channel at all.
+
+        This is the shape the courses importer takes when it is handed an id
+        range, and it is the only shape that works when the bot can forward from
+        a channel but not read it. Telegram does the reading: hand it a block of
+        ids, it copies whichever ones exist into BOOKS_CHANNEL, and the copies —
+        our own messages, always readable — are what get classified. Non-books
+        and duplicates are deleted again immediately, so the end state matches
+        the scan-first path.
+
+        With `msg_ids` the work is bounded by that list. Without it there is no
+        way to know where the channel ends, so it walks up from id 1 and stops
+        after FORWARD_SCAN_EMPTY_STREAK consecutive blocks that yielded nothing.
+        """
+        progress = IMPORT_PROGRESS[import_id]
+        books_data = get_books_data()
+        new_book_ids: List[str] = []
+        seen_in_run: set = set()
+        considered = 0
+        empty_streak = 0
+        batch_num = 0
+        cursor = 1
+        found_any = False
+
+        while import_id not in IMPORT_CANCEL:
+            if msg_ids is not None:
+                start = batch_num * FORWARD_BATCH_SIZE
+                if start >= len(msg_ids):
+                    break
+                batch = msg_ids[start : start + FORWARD_BATCH_SIZE]
+            else:
+                if found_any and empty_streak >= FORWARD_SCAN_EMPTY_STREAK:
+                    break
+                if not found_any and cursor > FORWARD_SCAN_BLIND_CEILING:
+                    break
+                batch = list(range(cursor, cursor + FORWARD_BATCH_SIZE))
+                cursor += FORWARD_BATCH_SIZE
+            batch_num += 1
+            considered += len(batch)
+            progress.update({
+                "fetched": considered,
+                "total_scan": max(progress.get("total_scan") or 0, considered),
+            })
+
+            try:
+                forwarded = await self._forward_batch(client, channel_id, batch)
+            except self._PARSE_ERRORS as e:
+                # The copies exist in BOOKS_CHANNEL but we cannot see what they
+                # are. Retrying would forward them a second time, so leave them
+                # unclaimed: the channel listener registers exactly this case.
+                logger.error(
+                    f"[BooksImport] block {batch[0]}-{batch[-1]} was forwarded "
+                    f"but its response could not be parsed ({e!r}); leaving the "
+                    "copies for the BOOKS_CHANNEL listener to register"
+                )
+                progress["errors"] += len(batch)
+                forwarded = []
+
+            if not forwarded:
+                empty_streak += 1
+                await asyncio.sleep(0.4)
+                continue
+
+            found_any = True
+            empty_streak = 0
+            # Claim before classifying: the listener has already been woken by
+            # these forwards and would otherwise register them itself, with
+            # worse metadata, while this loop is still working.
+            claim_import_message_ids(m.id for m in forwarded)
+
+            rejected: List[int] = []
+            for fwd in forwarded:
+                media = _media(fwd)
+                if not media:
+                    progress["skipped"] += 1
+                    rejected.append(fwd.id)
+                    continue
+                progress["total_media"] += 1
+                filename = getattr(media, "file_name", None) or ""
+                size = getattr(media, "file_size", 0) or 0
+                key = (filename.strip().lower(), size)
+                if not filename or not _is_book_filename(filename):
+                    progress["skipped_not_book"] += 1
+                    rejected.append(fwd.id)
+                    continue
+                if skip_duplicates and (
+                    key in seen_in_run
+                    or books_data.find_duplicate(None, filename, size)
+                ):
+                    progress["skipped_duplicate"] += 1
+                    seen_in_run.add(key)
+                    rejected.append(fwd.id)
+                    continue
+                seen_in_run.add(key)
+                book = self._build_book(fwd.id, filename, media, channel_label)
+                books_data.register_book(book)
+                new_book_ids.append(book.id)
+                progress["imported"] += 1
+
+            # One save for the whole block, never one per book.
+            books_data.bulk_save()
+            await self._delete_forwards(client, rejected)
+            progress["batches_done"] = batch_num
+            logger.info(
+                f"[BooksImport] forward-first block {batch[0]}-{batch[-1]}: "
+                f"{len(forwarded)} forwarded, {len(rejected)} rejected, "
+                f"imported so far: {progress['imported']}"
+            )
+            await asyncio.sleep(INTER_BATCH_DELAY)
 
         return new_book_ids
 
@@ -738,6 +1041,9 @@ class BooksImportManager:
             "skipped": 0,
             "skipped_duplicate": 0,
             "skipped_not_book": 0,
+            "skipped_unreadable": 0,
+            "read_access": None,
+            "import_method": None,
             "errors": 0,
             "fetched": 0,
             "total_scan": 0,
@@ -783,7 +1089,8 @@ class BooksImportManager:
             progress["is_admin"] = is_admin
 
             # Build the candidate id list.
-            if start_msg_id and end_msg_id:
+            whole_channel = not (start_msg_id and end_msg_id)
+            if not whole_channel:
                 if end_msg_id < start_msg_id:
                     start_msg_id, end_msg_id = end_msg_id, start_msg_id
                 msg_ids = list(range(start_msg_id, end_msg_id + 1))
@@ -792,49 +1099,82 @@ class BooksImportManager:
                 msg_ids = await self._discover_message_ids(
                     client, channel_id, import_id
                 )
-                if not msg_ids:
+
+            progress.update({"total_scan": len(msg_ids), "status": "fetching"})
+
+            # Which half of this module can actually run against this channel?
+            read_access = await self._reads_work(client, channel_id, msg_ids)
+            progress["read_access"] = read_access
+
+            if read_access:
+                progress["import_method"] = "scan-first"
+                file_list = await self._scan_media(
+                    client, channel_id, msg_ids, import_id
+                )
+                progress["total_media"] = len(file_list)
+
+                if skip_duplicates:
+                    progress["status"] = "deduplicating"
+                    file_list = self._filter_duplicates(file_list, import_id)
+                    progress["to_import"] = len(file_list)
+
+                if import_id in IMPORT_CANCEL:
+                    progress["status"] = "cancelled"
+                    return progress
+                if not file_list:
                     progress.update(
                         {
-                            "status": "error",
-                            "error_msg": (
-                                "Could not find any messages in this channel. "
-                                "Give an explicit message id range instead "
-                                "(open the first and last book in Telegram, "
-                                "copy their links, and use those)."
+                            "status": "done",
+                            "elapsed": round(
+                                time.time() - progress["start_time"], 1
                             ),
                         }
                     )
                     return progress
 
-            progress.update({"total_scan": len(msg_ids), "status": "fetching"})
-
-            # Always scan, even for an explicit range: we need each file's name
-            # to tell books from everything else in the channel, and to run the
-            # duplicate check before anything is copied.
-            file_list = await self._scan_media(client, channel_id, msg_ids, import_id)
-            progress["total_media"] = len(file_list)
-
-            if skip_duplicates:
-                progress["status"] = "deduplicating"
-                file_list = self._filter_duplicates(file_list, import_id)
-                progress["to_import"] = len(file_list)
-
-            if import_id in IMPORT_CANCEL:
-                progress["status"] = "cancelled"
-                return progress
-            if not file_list:
-                progress.update(
-                    {
-                        "status": "done",
-                        "elapsed": round(time.time() - progress["start_time"], 1),
-                    }
+                progress["status"] = "importing"
+                new_book_ids = await self._forward_and_register(
+                    client, file_list, channel_id, channel_label, import_id
                 )
-                return progress
-
-            progress["status"] = "importing"
-            new_book_ids = await self._forward_and_register(
-                client, file_list, channel_id, channel_label, import_id
-            )
+            else:
+                # Reads are refused or the channel's extent is unknowable, but
+                # forwarding out of it may still be allowed — which is why the
+                # courses importer works on the same channel. Let Telegram read
+                # it for us and classify the copies instead of giving up.
+                logger.warning(
+                    f"[BooksImport] cannot read messages in {channel_label}; "
+                    "switching to forward-first"
+                )
+                progress["import_method"] = "forward-first"
+                progress["status"] = "importing"
+                new_book_ids = await self._forward_first(
+                    client,
+                    channel_id,
+                    channel_label,
+                    import_id,
+                    msg_ids=msg_ids or None,
+                    skip_duplicates=skip_duplicates,
+                )
+                if import_id in IMPORT_CANCEL:
+                    progress["status"] = "cancelled"
+                    return progress
+                if not progress["total_media"]:
+                    progress.update(
+                        {
+                            "status": "error",
+                            "error_msg": (
+                                "Nothing could be imported. The bot cannot read "
+                                "this channel, and forwarding out of it produced "
+                                "no files either. Check that the channel is "
+                                "right, that the bot is an admin in your books "
+                                "channel, and that the source channel does not "
+                                "have content forwarding disabled. If the books "
+                                "start a long way into the channel, give an "
+                                "explicit message id range."
+                            ),
+                        }
+                    )
+                    return progress
 
             if enrich and new_book_ids and import_id not in IMPORT_CANCEL:
                 progress["status"] = "enriching"
