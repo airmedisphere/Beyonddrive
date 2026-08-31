@@ -77,6 +77,7 @@ class Book:
         reader_format: Optional[str] = None,
         reader_status: str = "unsupported",
         reader_error: Optional[str] = None,
+        file_hash: Optional[str] = None,
     ):
         self.id = book_id or _generate_id()
         self.title = title
@@ -90,6 +91,13 @@ class Book:
         self.size = size
         self.uploaded_at = _utc_now()
         self.updated_at = self.uploaded_at
+        # SHA-256 of the file content, computed at upload time from the
+        # website. Used to catch "I already have this exact file" before
+        # it gets uploaded a second/third time. None for books that were
+        # posted directly into BOOKS_CHANNEL by hand (no local file to
+        # hash) or uploaded before this field existed — those are only
+        # caught by the filename+size fallback, see find_duplicate().
+        self.file_hash = file_hash
 
         # Reader support: which message holds a reader-friendly version of
         # this book, in what format, and whether it's ready yet. For
@@ -118,6 +126,7 @@ class Book:
             "reader_format": self.reader_format,
             "reader_status": self.reader_status,
             "reader_error": self.reader_error,
+            "file_hash": self.file_hash,
         }
 
     @classmethod
@@ -137,6 +146,7 @@ class Book:
             reader_format=data.get("reader_format"),
             reader_status=data.get("reader_status", "unsupported"),
             reader_error=data.get("reader_error"),
+            file_hash=data.get("file_hash"),
         )
         book.uploaded_at = data.get("uploaded_at", book.uploaded_at)
         book.updated_at = data.get("updated_at", book.updated_at)
@@ -239,6 +249,70 @@ class BooksLibrary:
         for b in self.books.values():
             tags.update(b.tags)
         return sorted(tags)
+
+    def find_duplicate(
+        self, file_hash: Optional[str], filename: str, size: int
+    ) -> Optional[Book]:
+        """
+        Look for a book that's already the same file. Exact content match
+        (file_hash) wins when we have one. Otherwise fall back to
+        "same filename and same byte size", which reliably catches
+        re-uploads of the exact same file even for older library entries
+        that predate file_hash existing.
+        """
+        if file_hash:
+            for b in self.books.values():
+                if b.file_hash and b.file_hash == file_hash:
+                    return b
+
+        norm_name = filename.strip().lower()
+        for b in self.books.values():
+            if b.size == size and b.filename.strip().lower() == norm_name:
+                return b
+        return None
+
+    def find_duplicate_groups(self) -> List[Dict[str, Any]]:
+        """
+        Scan the whole library for likely-duplicate books, for the admin
+        "Find duplicates" tool. Groups by file_hash where available
+        (exact-content matches), and by (filename, size) for everything
+        else (covers books uploaded before file_hash existed, or posted
+        directly into the Telegram channel). Only groups with 2+ books
+        are returned. Within each group, oldest upload is flagged as
+        "keep" by default — the admin can still delete whichever they want.
+        """
+        by_hash: Dict[str, List[Book]] = {}
+        by_name_size: Dict[Tuple[str, int], List[Book]] = {}
+
+        for b in self.books.values():
+            if b.file_hash:
+                by_hash.setdefault(b.file_hash, []).append(b)
+            else:
+                key = (b.filename.strip().lower(), b.size)
+                by_name_size.setdefault(key, []).append(b)
+
+        groups: List[Dict[str, Any]] = []
+
+        def _add_group(members: List[Book], method: str):
+            if len(members) < 2:
+                return
+            members = sorted(members, key=lambda b: b.uploaded_at)
+            groups.append(
+                {
+                    "method": method,
+                    "books": [
+                        {**b.to_dict(), "suggested_keep": i == 0}
+                        for i, b in enumerate(members)
+                    ],
+                }
+            )
+
+        for members in by_hash.values():
+            _add_group(members, "identical_file")
+        for members in by_name_size.values():
+            _add_group(members, "same_name_and_size")
+
+        return groups
 
 
 BOOKS_DATA: Optional[BooksLibrary] = None
@@ -404,6 +478,7 @@ async def upload_book_to_telegram(
     description: str = "",
     tags: Optional[List[str]] = None,
     language: str = "",
+    file_hash: Optional[str] = None,
 ) -> Book:
     """
     Upload a book file to BOOKS_CHANNEL and register it in the library.
@@ -469,6 +544,7 @@ async def upload_book_to_telegram(
         description=description,
         tags=tags or [],
         language=language,
+        file_hash=file_hash,
         **reader_kwargs,
     )
     BOOKS_DATA.add_book(book)

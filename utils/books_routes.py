@@ -7,6 +7,7 @@ All books live in BOOKS_CHANNEL and are completely hidden from the main TGDrive 
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 from pathlib import Path
@@ -301,10 +302,17 @@ async def upload_book(
     description: str = Form(""),
     tags: str = Form(""),          # comma-separated
     language: str = Form(""),
+    allow_duplicate: bool = Form(False),
 ):
     """
     Upload a PDF / EPUB from the Books website.
     The file is stored only in BOOKS_CHANNEL and never appears in the main TGDrive.
+
+    Rejects (409) an upload that's already in the library — same file
+    content (or, for older entries without a stored hash, same filename
+    + size) — unless allow_duplicate=true is sent, so someone who really
+    does want to keep two copies (e.g. a different scan/edition sharing a
+    filename) still can.
     """
     _ensure_books_enabled()
 
@@ -316,8 +324,11 @@ async def upload_book(
             detail=f"Unsupported file type: {ext}. Allowed: pdf, epub, mobi, azw3, txt, djvu",
         )
 
-    # Save to a temporary file first
+    # Save to a temporary file first, hashing as we go so we don't have to
+    # read the file twice.
     suffix = ext or ".bin"
+    hasher = hashlib.sha256()
+    size = 0
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp_path = tmp.name
@@ -325,11 +336,27 @@ async def upload_book(
                 chunk = await file.read(1024 * 1024)
                 if not chunk:
                     break
+                hasher.update(chunk)
+                size += len(chunk)
                 tmp.write(chunk)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save upload: {e}")
 
+    file_hash = hasher.hexdigest()
+
     try:
+        if not allow_duplicate:
+            books_data = get_books_data()
+            existing = books_data.find_duplicate(file_hash, filename, size)
+            if existing:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": f'This book is already in the library as "{existing.title}".',
+                        "existing_book": existing.to_dict(),
+                    },
+                )
+
         tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
         book = await upload_book_to_telegram(
             file_path=tmp_path,
@@ -339,8 +366,11 @@ async def upload_book(
             description=description,
             tags=tag_list,
             language=language,
+            file_hash=file_hash,
         )
         return {"status": "ok", "book": book.to_dict()}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Book upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -349,6 +379,24 @@ async def upload_book(
             os.unlink(tmp_path)
         except Exception:
             pass
+
+
+@router.get("/admin/duplicates")
+async def list_duplicate_books(_admin: None = Depends(_require_admin)):
+    """
+    Find books that are likely duplicates of each other, already sitting
+    in the library — for cleaning up ones uploaded 2-3 times before this
+    check existed. Groups by identical file content where we have a hash,
+    otherwise by matching filename+size.
+    """
+    books_data = _ensure_books_enabled()
+    groups = books_data.find_duplicate_groups()
+    return {
+        "status": "ok",
+        "group_count": len(groups),
+        "duplicate_book_count": sum(len(g["books"]) - 1 for g in groups),
+        "groups": groups,
+    }
 
 
 @router.patch("/{book_id}")
