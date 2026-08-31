@@ -109,6 +109,24 @@ class Book:
         self.reader_status = reader_status
         self.reader_error = reader_error
 
+    def __setstate__(self, state: dict) -> None:
+        """
+        Called by dill/pickle when restoring a Book from books.data instead
+        of __init__. Books saved before a new field existed (file_hash was
+        added after this library already had hundreds of books in it)
+        come back from an old pickle *without* that attribute at all —
+        every book already in the library before that deploy would then
+        AttributeError the instant anything called .to_dict() on it,
+        which is exactly what happened here (500s that surfaced as
+        "Book not found" on individual pages and an empty admin panel,
+        even though the data itself was completely intact).
+        Defaulting any newly-added field here means restoring an old
+        library self-heals on load — no data migration step needed, and
+        no future field addition can trigger this same class of crash.
+        """
+        self.__dict__.update(state)
+        self.__dict__.setdefault("file_hash", None)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -126,7 +144,11 @@ class Book:
             "reader_format": self.reader_format,
             "reader_status": self.reader_status,
             "reader_error": self.reader_error,
-            "file_hash": self.file_hash,
+            # getattr, not self.file_hash, as a second line of defense —
+            # __setstate__ above should always guarantee this exists, but
+            # this way to_dict() itself can never be the thing that crashes
+            # on an old object even if that guarantee were ever bypassed.
+            "file_hash": getattr(self, "file_hash", None),
         }
 
     @classmethod
@@ -160,6 +182,14 @@ class BooksLibrary:
         # Message id of the last books.data backup sent to BOOKS_CHANNEL,
         # so future backups can edit it instead of sending a new file each time.
         self.backup_message_id: Optional[int] = None
+
+    def __setstate__(self, state: dict) -> None:
+        """Same self-healing purpose as Book.__setstate__ above — guards
+        this class against the same crash if a future field is ever added
+        here too."""
+        self.__dict__.update(state)
+        self.__dict__.setdefault("backup_message_id", None)
+        self.__dict__.setdefault("is_updated", False)
 
     def save(self) -> None:
         with open(books_cache_path, "wb") as f:
@@ -262,7 +292,7 @@ class BooksLibrary:
         """
         if file_hash:
             for b in self.books.values():
-                if b.file_hash and b.file_hash == file_hash:
+                if getattr(b, "file_hash", None) and b.file_hash == file_hash:
                     return b
 
         norm_name = filename.strip().lower()
