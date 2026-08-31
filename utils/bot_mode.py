@@ -794,6 +794,11 @@ def _format_books_import_status(progress: dict) -> str:
         lines.append(f"Already in library: {progress['skipped_duplicate']}")
     if progress.get("skipped_not_book"):
         lines.append(f"Not book files: {progress['skipped_not_book']}")
+    if progress.get("skipped_unreadable"):
+        lines.append(
+            f"Unreadable messages: {progress['skipped_unreadable']} "
+            "(skipped, not books)"
+        )
 
     lines.append(f"**Imported: {progress.get('imported', 0)}**")
 
