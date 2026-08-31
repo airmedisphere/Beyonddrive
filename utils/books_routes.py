@@ -7,9 +7,12 @@ All books live in BOOKS_CHANNEL and are completely hidden from the main TGDrive 
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
+import secrets
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional, List
 
@@ -141,6 +144,226 @@ async def generate_all_covers_route(_admin: None = Depends(_require_admin)):
     except Exception as e:
         logger.error(f"Bulk cover generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Bulk import from a Telegram channel
+# ---------------------------------------------------------------------------
+# Declared above the "/{book_id}" routes below. FastAPI matches in declaration
+# order and a path parameter never spans a "/", so two-segment paths like
+# /admin/import could not be swallowed by /{book_id} anyway — but keeping the
+# literal routes first means that stays true even if someone later adds a
+# catch-all.
+
+# Background import tasks live here rather than on app.state (which a router
+# has no handle on). The set holds a strong reference for the task's whole
+# life: without it the only reference is the event loop's, and a task sitting
+# in the asyncio.sleep() between forward batches can be garbage collected
+# mid-import. Same reason main.py keeps app.state.import_tasks.
+_BOOKS_IMPORT_TASKS: set = set()
+
+
+def _spawn_import_task(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BOOKS_IMPORT_TASKS.add(task)
+    task.add_done_callback(_BOOKS_IMPORT_TASKS.discard)
+
+
+@router.post("/admin/import")
+async def start_channel_import(
+    request: Request, _admin: None = Depends(_require_admin)
+):
+    """
+    Start a bulk import from a Telegram channel into the books library and
+    return immediately with an import_id to poll.
+
+    Body:
+      channel          (required) @username, invite-free public link, or -100… id
+      start_msg_id     optional, first message id to consider
+      end_msg_id       optional, last message id to consider (inclusive)
+      skip_duplicates  default true  — skip files already in the library
+      enrich           default true  — read embedded metadata after importing
+      generate_covers  default true  — generate covers during enrichment
+
+    This returns as soon as the task is scheduled because a real import takes
+    minutes: the forwarding is fast, but enrichment is deliberately sequential
+    (one file downloaded at a time) to stay inside the instance's memory
+    budget, so there is no HTTP request worth holding open for it.
+    """
+    _ensure_books_enabled()
+
+    from utils.books_import import BOOKS_IMPORT_MANAGER, IMPORT_PROGRESS
+    from utils.clients import get_client
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Expected a JSON body")
+
+    channel = (data.get("channel") or "").strip()
+    if not channel:
+        raise HTTPException(status_code=400, detail="'channel' is required")
+
+    def _opt_int(key: str) -> Optional[int]:
+        value = data.get(key)
+        if value in (None, "", 0, "0"):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"'{key}' must be a number")
+
+    start_msg_id = _opt_int("start_msg_id")
+    end_msg_id = _opt_int("end_msg_id")
+    if bool(start_msg_id) != bool(end_msg_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Give both start_msg_id and end_msg_id, or neither.",
+        )
+
+    skip_duplicates = bool(data.get("skip_duplicates", True))
+    enrich = bool(data.get("enrich", True))
+    generate_covers = bool(data.get("generate_covers", True))
+
+    import_id = secrets.token_hex(8)
+    client = get_client()
+
+    async def _run():
+        try:
+            await BOOKS_IMPORT_MANAGER.import_from_channel(
+                client,
+                channel,
+                start_msg_id=start_msg_id,
+                end_msg_id=end_msg_id,
+                skip_duplicates=skip_duplicates,
+                enrich=enrich,
+                generate_covers=generate_covers,
+                import_id=import_id,
+            )
+        except Exception as e:
+            # import_from_channel already records errors in IMPORT_PROGRESS;
+            # this is the belt-and-braces case where it failed before it could.
+            logger.error(f"Background books import {import_id} error: {e}")
+            entry = IMPORT_PROGRESS.setdefault(import_id, {})
+            entry["status"] = "error"
+            entry["error_msg"] = str(e)
+
+    _spawn_import_task(_run())
+    logger.info(f"Books import {import_id} started from {channel}")
+    return {"status": "started", "import_id": import_id}
+
+
+@router.get("/admin/import/{import_id}")
+async def get_channel_import_progress(
+    import_id: str, _admin: None = Depends(_require_admin)
+):
+    """Poll a running or finished import. status cycles through validating →
+    scanning → fetching → deduplicating → importing → enriching → done, or
+    lands on cancelled / error."""
+    from utils.books_import import get_import_progress
+
+    progress = get_import_progress(import_id)
+    if progress is None:
+        raise HTTPException(status_code=404, detail="Unknown import_id")
+    return {"status": "ok", "data": progress}
+
+
+@router.post("/admin/import/{import_id}/cancel")
+async def cancel_channel_import(
+    import_id: str, _admin: None = Depends(_require_admin)
+):
+    """
+    Ask a running import to stop at its next safe point.
+
+    This is a stop, not an undo: books already forwarded and registered stay in
+    the library. Rolling them back would mean deleting files out of
+    BOOKS_CHANNEL, which is a far more destructive thing to hang off a Cancel
+    button — use the admin book list to remove any you didn't want.
+    """
+    from utils.books_import import cancel_import
+
+    if not cancel_import(import_id):
+        raise HTTPException(status_code=404, detail="Unknown import_id")
+    return {"status": "cancelling", "import_id": import_id}
+
+
+@router.get("/admin/enrich-status")
+async def enrich_status(_admin: None = Depends(_require_admin)):
+    """How many books have never been through an enrichment pass."""
+    _ensure_books_enabled()
+    from utils.books_import import count_unenriched
+
+    return {"status": "ok", "unenriched": count_unenriched()}
+
+
+@router.post("/admin/enrich")
+async def start_enrich_pass(
+    request: Request, _admin: None = Depends(_require_admin)
+):
+    """
+    Run the enrichment pass over every book that has never had one: read
+    embedded PDF/EPUB metadata, fill in blank fields, and generate a cover.
+
+    Also the recovery path — enrichment marks each book as it finishes, so if a
+    previous run was cancelled or the instance restarted mid-pass, this picks
+    up exactly where it stopped instead of re-downloading everything.
+
+    Body: generate_covers (default true).
+    Returns an import_id so the same progress endpoint can be polled.
+    """
+    _ensure_books_enabled()
+
+    from utils.books_import import (
+        IMPORT_CANCEL,
+        IMPORT_PROGRESS,
+        count_unenriched,
+        enrich_books,
+    )
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    generate_covers = bool(data.get("generate_covers", True))
+
+    pending = count_unenriched()
+    if not pending:
+        return {"status": "ok", "unenriched": 0, "import_id": None}
+
+    import_id = secrets.token_hex(8)
+    IMPORT_PROGRESS[import_id] = {
+        "import_id": import_id,
+        "status": "enriching",
+        "imported": 0,
+        "enriched": 0,
+        "covers": 0,
+        "enrich_total": pending,
+        "enrich_done": 0,
+        "errors": 0,
+        "start_time": time.time(),
+        "channel_name": "library re-enrichment",
+        "error_msg": None,
+    }
+
+    async def _run():
+        entry = IMPORT_PROGRESS[import_id]
+        try:
+            summary = await enrich_books(
+                None, import_id=import_id, generate_covers=generate_covers
+            )
+            entry.update(summary)
+            entry["status"] = "cancelled" if import_id in IMPORT_CANCEL else "done"
+        except Exception as e:
+            logger.error(f"Books enrichment {import_id} error: {e}")
+            entry["status"] = "error"
+            entry["error_msg"] = str(e)
+        finally:
+            entry["elapsed"] = round(time.time() - entry["start_time"], 1)
+            IMPORT_CANCEL.discard(import_id)
+
+    _spawn_import_task(_run())
+    logger.info(f"Books enrichment {import_id} started for {pending} book(s)")
+    return {"status": "started", "import_id": import_id, "unenriched": pending}
 
 
 @router.get("/{book_id}")

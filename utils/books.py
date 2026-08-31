@@ -78,6 +78,8 @@ class Book:
         reader_status: str = "unsupported",
         reader_error: Optional[str] = None,
         file_hash: Optional[str] = None,
+        source_channel: Optional[str] = None,
+        enriched: bool = False,
     ):
         self.id = book_id or _generate_id()
         self.title = title
@@ -109,6 +111,20 @@ class Book:
         self.reader_status = reader_status
         self.reader_error = reader_error
 
+        # Bulk import provenance. source_channel is the @username / id of the
+        # channel this book was imported from (None for website uploads and
+        # for files posted straight into BOOKS_CHANNEL by hand), kept so an
+        # admin can tell at a glance where a batch came from.
+        self.source_channel = source_channel
+        # enriched=True once the post-import pass has read embedded metadata
+        # out of the actual file. Books are registered immediately with only
+        # filename-derived metadata (that costs nothing), then enrichment
+        # runs strictly one file at a time afterwards — see
+        # utils/books_import.enrich_books(). This flag is what lets that pass
+        # be resumable: an import interrupted by a restart or an OOM can be
+        # re-run and will only touch what it never got to.
+        self.enriched = enriched
+
     def __setstate__(self, state: dict) -> None:
         """
         Called by dill/pickle when restoring a Book from books.data instead
@@ -126,6 +142,10 @@ class Book:
         """
         self.__dict__.update(state)
         self.__dict__.setdefault("file_hash", None)
+        # Added with the bulk-import feature, long after this library had
+        # books in it — same reasoning as file_hash above.
+        self.__dict__.setdefault("source_channel", None)
+        self.__dict__.setdefault("enriched", False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -149,6 +169,8 @@ class Book:
             # this way to_dict() itself can never be the thing that crashes
             # on an old object even if that guarantee were ever bypassed.
             "file_hash": getattr(self, "file_hash", None),
+            "source_channel": getattr(self, "source_channel", None),
+            "enriched": getattr(self, "enriched", False),
         }
 
     @classmethod
@@ -169,6 +191,8 @@ class Book:
             reader_status=data.get("reader_status", "unsupported"),
             reader_error=data.get("reader_error"),
             file_hash=data.get("file_hash"),
+            source_channel=data.get("source_channel"),
+            enriched=data.get("enriched", False),
         )
         book.uploaded_at = data.get("uploaded_at", book.uploaded_at)
         book.updated_at = data.get("updated_at", book.updated_at)
@@ -201,6 +225,32 @@ class BooksLibrary:
         self.books[book.id] = book
         self.save()
         return book
+
+    def register_book(self, book: Book) -> Book:
+        """
+        Add a book to the library *without* writing books.data to disk.
+
+        add_book() saves on every single call, which is right for a one-off
+        upload but wrong for a bulk import: pickling the entire library once
+        per file turns a 500-book import into 500 full-library dumps, and the
+        dump itself allocates a serialized copy of everything in memory. On a
+        512MB instance that is both the slowest and the most dangerous part
+        of the import.
+
+        Bulk callers use register_book() per file and bulk_save() once per
+        batch instead. The tradeoff is deliberate and bounded: if the process
+        dies mid-batch, the files are already safe in BOOKS_CHANNEL and only
+        that batch's registrations are lost — re-running the import picks
+        them up again (and the duplicate check stops the ones that landed).
+        """
+        self.books[book.id] = book
+        return book
+
+    def bulk_save(self) -> int:
+        """Persist the library once after a run of register_book() calls.
+        Returns the number of books now in the library, for logging."""
+        self.save()
+        return len(self.books)
 
     def get_book(self, book_id: str) -> Optional[Book]:
         return self.books.get(book_id)
@@ -346,6 +396,70 @@ class BooksLibrary:
 
 
 BOOKS_DATA: Optional[BooksLibrary] = None
+
+
+# ---------------------------------------------------------------------------
+# Import window guard
+# ---------------------------------------------------------------------------
+# A bulk import forwards files into BOOKS_CHANNEL, which means the channel
+# listener below fires for every single one of them — and the listener's whole
+# job is to auto-register anything new it sees. Left alone, the two would race:
+# the listener waits ~2s for a registration to appear, but the importer only
+# writes registrations once per batch, so anything forwarded early in a batch
+# would get registered twice (once properly by the importer, once as a
+# metadata-poorer duplicate by the listener).
+#
+# The importer wraps its work in begin_import_window()/end_import_window() and
+# claims message ids as soon as forward_messages() hands them back. The
+# listener consults both: a claimed id is dropped outright, and while a window
+# is open it waits much longer before concluding "nobody else is going to
+# register this". A file a human posts by hand mid-import still gets picked up
+# — it just takes a few seconds longer to appear.
+_import_window_depth = 0
+_import_claimed_ids: set = set()
+
+
+def begin_import_window() -> None:
+    global _import_window_depth
+    if _import_window_depth == 0:
+        # Clear at the *start* of a fresh import rather than at the end of the
+        # previous one: a listener callback can still be sitting in its wait
+        # loop when the import finishes, and it needs the claim to still be
+        # there to know the file was not its business.
+        _import_claimed_ids.clear()
+    _import_window_depth += 1
+
+
+def end_import_window() -> None:
+    """Close one nesting level.
+
+    Deliberately does not drop the claimed-id set — see begin_import_window().
+    The importer must have registered and saved its books *before* calling
+    this, so that any listener still waiting falls through to the
+    "already registered" check and drops the message on that basis instead.
+    """
+    global _import_window_depth
+    _import_window_depth = max(0, _import_window_depth - 1)
+
+
+def is_import_window_active() -> bool:
+    return _import_window_depth > 0
+
+
+def claim_import_message_ids(message_ids) -> None:
+    """Tell the listener 'the importer owns these, don't touch them'."""
+    # Bound the set so a very long-lived process running many large imports
+    # can't accumulate ids indefinitely; 50k ints is well under a megabyte and
+    # far more than any single import will forward.
+    if len(_import_claimed_ids) > 50_000:
+        _import_claimed_ids.clear()
+    for mid in message_ids:
+        if mid is not None:
+            _import_claimed_ids.add(int(mid))
+
+
+def is_claimed_by_import(message_id: int) -> bool:
+    return int(message_id) in _import_claimed_ids
 
 
 async def _load_books_data_from_message(client: Client, msg: Message) -> Optional["BooksLibrary"]:
@@ -820,6 +934,64 @@ async def stream_cover(book_id: str, request):
     )
 
 
+def reader_kwargs_for_ext(ext: str, message_id: int) -> Dict[str, Any]:
+    """
+    Decide the reader_* fields for a freshly-registered book based on its
+    extension. PDF/EPUB/TXT are readable in the browser as-is, so the original
+    message doubles as the reader file. MOBI/AZW3/DJVU need converting first,
+    so they start as "converting" and get filled in later. Anything else is
+    downloadable but not readable in-browser.
+
+    Shared by the channel listener and the bulk importer so the two can never
+    disagree about what counts as reader-ready.
+    """
+    if ext in NATIVE_READER_FORMATS:
+        return dict(
+            reader_message_id=message_id,
+            reader_format=NATIVE_READER_FORMATS[ext],
+            reader_status="ready",
+        )
+    if needs_conversion(ext):
+        return dict(reader_status="converting")
+    return dict(reader_status="unsupported")
+
+
+def parse_book_caption(caption: str) -> Dict[str, Any]:
+    """
+    Pull "Title: ...", "Author: ...", "Tags: a, b", "Language: ..." and
+    "Description: ..." lines out of a Telegram caption. This is exactly the
+    format upload_book_to_telegram() writes, so website uploads round-trip
+    cleanly; channels that happen to use the same convention get parsed for
+    free, and ones that don't just yield an empty dict.
+    """
+    out: Dict[str, Any] = {}
+    for line in (caption or "").splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip().lower().lstrip("📚").strip()
+        value = value.strip()
+        if not value:
+            continue
+        if key == "title":
+            out["title"] = value
+        elif key == "author":
+            out["author"] = value
+        elif key in ("tags", "tag"):
+            out["tags"] = [t.strip() for t in value.split(",") if t.strip()]
+        elif key in ("language", "lang"):
+            out["language"] = value
+        elif key in ("description", "desc"):
+            out["description"] = value
+    return out
+
+
+def book_media(message: Message):
+    """The media object of a message, if it could plausibly be a book file."""
+    return message.document or message.video or message.audio
+
+
 def _book_from_channel_message(message: Message) -> Optional[Book]:
     """
     Build a Book from a raw Telegram message posted in BOOKS_CHANNEL.
@@ -827,7 +999,7 @@ def _book_from_channel_message(message: Message) -> Optional[Book]:
     (i.e. not through the website's /api/books/upload endpoint).
     Returns None if the message isn't a supported book file.
     """
-    media = message.document or message.video or message.audio
+    media = book_media(message)
     if not media:
         return None
 
@@ -836,48 +1008,23 @@ def _book_from_channel_message(message: Message) -> Optional[Book]:
     if ext not in ALLOWED_BOOK_EXTENSIONS:
         return None
 
-    # Optionally parse "Title: ...", "Author: ...", "Tags: a, b" lines out
-    # of the caption (this is exactly the caption format upload_book_to_telegram
-    # writes, so books uploaded via the website parse back out cleanly too).
-    title, author, tags = None, "", []
     caption = message.caption or ""
-    for line in caption.splitlines():
-        line = line.strip()
-        if not line or ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        key = key.strip().lower()
-        value = value.strip()
-        if key == "title":
-            title = value
-        elif key == "author":
-            author = value
-        elif key == "tags":
-            tags = [t.strip() for t in value.split(",") if t.strip()]
-
+    meta = parse_book_caption(caption)
+    title = meta.get("title")
     if not title:
         first_line = caption.strip().splitlines()[0] if caption.strip() else ""
         title = first_line.lstrip("📚").strip() or Path(filename).stem
-
-    if ext in NATIVE_READER_FORMATS:
-        reader_kwargs = dict(
-            reader_message_id=message.id,
-            reader_format=NATIVE_READER_FORMATS[ext],
-            reader_status="ready",
-        )
-    elif needs_conversion(ext):
-        reader_kwargs = dict(reader_status="converting")
-    else:
-        reader_kwargs = dict(reader_status="unsupported")
 
     return Book(
         title=title,
         message_id=message.id,
         size=media.file_size,
         filename=filename,
-        author=author,
-        tags=tags,
-        **reader_kwargs,
+        author=meta.get("author", ""),
+        description=meta.get("description", ""),
+        tags=meta.get("tags", []),
+        language=meta.get("language", ""),
+        **reader_kwargs_for_ext(ext, message.id),
     )
 
 
@@ -907,14 +1054,37 @@ def register_books_channel_listener(clients: List[Client]) -> None:
         if BOOKS_DATA is None:
             BOOKS_DATA = get_books_data()
 
+        # A bulk import forwards files in here itself and registers them with
+        # richer metadata than this listener can produce, so anything it has
+        # claimed is not ours to touch. See the import window guard above.
+        if is_claimed_by_import(message.id):
+            return
+
         # If this message was just sent by upload_book_to_telegram(), it may
         # already be registered (or about to be, a moment before this event
         # is delivered). Give that a brief head start, then re-check, so we
         # don't create a duplicate, metadata-poorer entry for the same file.
-        for _ in range(2):
+        #
+        # While an import is running the head start has to be much longer:
+        # the importer saves registrations once per batch (up to 100 files),
+        # so "not registered yet" says nothing about whether it's about to be.
+        # Re-check the claim each time round, since the importer may only
+        # learn the forwarded message id after this handler already started.
+        attempts = 40 if is_import_window_active() else 2
+        for _ in range(attempts):
+            if is_claimed_by_import(message.id):
+                return
             if any(b.message_id == message.id for b in BOOKS_DATA.books.values()):
                 return
             await asyncio.sleep(1)
+            # Stop waiting early once the import has finished and it's clear
+            # this message was never one of its files.
+            if attempts > 2 and not is_import_window_active():
+                if is_claimed_by_import(message.id):
+                    return
+                if any(b.message_id == message.id for b in BOOKS_DATA.books.values()):
+                    return
+                break
 
         # Skip the periodic books.data metadata backup file, and any
         # already-uploaded reader-conversion output files (these carry a

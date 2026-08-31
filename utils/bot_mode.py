@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import time
 import traceback
 from pathlib import Path
 from pyrogram import Client, filters
@@ -41,6 +42,11 @@ You can use this bot to upload files to your TG Drive website directly instead o
 /send_to @channel - Forward all files from current folder to a channel/group
 /send_file FILE_ID @channel - Forward a single file to a channel/group
 /generate_link - Generate a shareable link for current folder files
+
+📚 **Books Library:**
+/import_books - Bulk import books from a channel into the books library
+/enrich_books - Fill in missing titles, authors and covers
+/cancel_import ID - Stop a running books import
 
 📤 **How To Upload Files:** Send a file to this bot and it will be uploaded to your TG Drive website. You can also set a folder for file uploads using /set_folder command.
 
@@ -708,7 +714,7 @@ def parse_telegram_link(link):
         r'https://telegram\.me/([^/]+)/(\d+)',  # https://telegram.me/channel/123
         r't\.me/([^/]+)/(\d+)',  # t.me/channel/123
     ]
-    
+
     for pattern in patterns:
         match = re.match(pattern, link.strip())
         if match:
@@ -718,8 +724,446 @@ def parse_telegram_link(link):
                 'channel': channel,
                 'message_id': message_id
             }
-    
+
     return None
+
+
+# ===========================================================================
+# BOOKS LIBRARY — bulk import from a channel
+# ===========================================================================
+# Entirely separate from the drive/courses import above: books live in
+# BOOKS_CHANNEL with their own metadata store, and nothing here touches
+# DRIVE_DATA, BOT_MODE.current_folder or STORAGE_CHANNEL. That separation is
+# deliberate — a books import must never be able to write into the courses
+# drive, so this section shares no state with the handlers above beyond the
+# task-reference set and manual_ask().
+
+_BOOKS_STATUS_EDIT_INTERVAL = 3.0  # seconds between status message edits
+
+
+def _parse_books_channel_input(text: str):
+    """
+    Accept any of the shapes a person actually pastes: @name, name,
+    -100123456789, https://t.me/name, or a full message link
+    https://t.me/name/123.
+
+    Returns (channel, message_id_or_None). The message id is used to prefill a
+    range when the admin pastes two message links, which is far easier than
+    asking them to find raw numeric ids.
+    """
+    text = (text or "").strip()
+    parsed = parse_telegram_link(text)
+    if parsed:
+        return parsed["channel"], parsed["message_id"]
+
+    match = re.match(r"^(?:https?://)?(?:t|telegram)\.me/([^/?#]+)/?$", text)
+    if match:
+        return match.group(1), None
+
+    return text.lstrip("@") if not text.startswith("-") else text, None
+
+
+def _format_books_import_status(progress: dict) -> str:
+    """Render IMPORT_PROGRESS into the status message the bot keeps editing."""
+    status = progress.get("status", "?")
+    icons = {
+        "validating": "🔎",
+        "scanning": "📡",
+        "fetching": "📥",
+        "deduplicating": "🧹",
+        "importing": "📚",
+        "enriching": "✨",
+        "done": "✅",
+        "cancelled": "🛑",
+        "cancelling": "🛑",
+        "error": "❌",
+    }
+    lines = [
+        f"{icons.get(status, '⏳')} **Books Import — {status}**",
+        f"**Source:** {progress.get('channel_name') or progress.get('channel')}",
+        "",
+    ]
+
+    if status in ("scanning", "fetching"):
+        lines.append(
+            f"Scanned: {progress.get('fetched', 0)}/{progress.get('total_scan', 0)}"
+        )
+    if progress.get("total_media"):
+        lines.append(f"Book files found: {progress['total_media']}")
+    if progress.get("skipped_duplicate"):
+        lines.append(f"Already in library: {progress['skipped_duplicate']}")
+    if progress.get("skipped_not_book"):
+        lines.append(f"Not book files: {progress['skipped_not_book']}")
+
+    lines.append(f"**Imported: {progress.get('imported', 0)}**")
+
+    if progress.get("enrich_total"):
+        lines.append(
+            f"Enriched: {progress.get('enrich_done', 0)}/{progress['enrich_total']}"
+            f"  ·  Covers: {progress.get('covers', 0)}"
+        )
+    if progress.get("errors"):
+        lines.append(f"Errors: {progress['errors']}")
+    if progress.get("error_msg"):
+        lines.append(f"\n⚠️ {progress['error_msg']}")
+    if progress.get("elapsed"):
+        lines.append(f"\nTook {progress['elapsed']}s")
+    if status == "enriching":
+        lines.append(
+            "\n_Enrichment downloads one book at a time on purpose, to stay "
+            "inside the server's memory limit. This part is slow._"
+        )
+    if status not in ("done", "cancelled", "error"):
+        lines.append(f"\n`/cancel_import {progress.get('import_id', '')}`")
+
+    return "\n".join(lines)
+
+
+async def _run_books_import(client, chat_id, status_msg, import_id, **kwargs):
+    """
+    Run the import and keep a single status message up to date instead of
+    spamming the chat. The import itself runs as a separate task so that a
+    flood wait inside it can never stall the status edits, and vice versa.
+    """
+    from utils.books_import import (
+        BOOKS_IMPORT_MANAGER,
+        IMPORT_PROGRESS,
+        get_import_progress,
+    )
+    from utils.clients import get_client
+
+    last_render = None
+    try:
+        # Seed progress synchronously so /cancel_import works during the few
+        # seconds before import_from_channel gets to register its own entry.
+        IMPORT_PROGRESS.setdefault(
+            import_id,
+            {
+                "import_id": import_id,
+                "status": "validating",
+                "channel": kwargs.get("channel_identifier"),
+                "start_time": time.time(),
+            },
+        )
+        import_task = asyncio.create_task(
+            BOOKS_IMPORT_MANAGER.import_from_channel(
+                get_client(), import_id=import_id, **kwargs
+            )
+        )
+        _BULK_IMPORT_TASKS.add(import_task)
+        import_task.add_done_callback(_BULK_IMPORT_TASKS.discard)
+
+        while True:
+            done = import_task.done()
+            progress = get_import_progress(import_id) or IMPORT_PROGRESS.get(
+                import_id, {"import_id": import_id, "status": "starting"}
+            )
+            rendered = _format_books_import_status(progress)
+            if rendered != last_render:
+                last_render = rendered
+                try:
+                    await status_msg.edit_text(rendered)
+                except Exception:
+                    # MESSAGE_NOT_MODIFIED, a flood wait on edits, or the admin
+                    # deleting the status message: none of these should be able
+                    # to kill an import that is otherwise running fine.
+                    pass
+            if done:
+                break
+            await asyncio.sleep(_BOOKS_STATUS_EDIT_INTERVAL)
+
+        result = import_task.result()
+        imported = result.get("imported", 0)
+        if result.get("status") == "done":
+            tail = f"✅ Done — **{imported}** book(s) added to the library."
+            if result.get("skipped_duplicate"):
+                tail += (
+                    f"\n{result['skipped_duplicate']} were already in the "
+                    "library and were skipped."
+                )
+            if result.get("skipped_memory"):
+                tail += (
+                    f"\n{result['skipped_memory']} book(s) still need metadata "
+                    "and covers — run /enrich_books later to finish them."
+                )
+        elif result.get("status") == "cancelled":
+            tail = (
+                f"🛑 Cancelled after importing **{imported}** book(s). "
+                "Books already added stay in the library."
+            )
+        else:
+            tail = f"❌ Import failed: {result.get('error_msg', 'unknown error')}"
+        await client.send_message(chat_id, tail)
+
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"Books import task failed: {e}")
+        try:
+            await client.send_message(chat_id, f"❌ Books import failed: {e}")
+        except Exception:
+            pass
+
+
+@main_bot.on_message(
+    filters.command("import_books")
+    & filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS)
+)
+async def import_books_handler(client, message):
+    """Conversational bulk import of books from a source channel."""
+    if not config.BOOKS_CHANNEL:
+        await message.reply_text(
+            "❌ BOOKS_CHANNEL is not configured, so there is nowhere to import "
+            "books into. Set it in your environment and restart."
+        )
+        return
+
+    if message.chat.id in _pending_requests:
+        await message.reply_text(
+            "I'm already waiting for your input. Please provide the required "
+            "information or /cancel."
+        )
+        return
+
+    await message.reply_text(
+        "📚 **Bulk import books from a channel**\n\n"
+        "I'll forward book files from a source channel into your books channel "
+        "and add them to the library. Duplicates are skipped automatically.\n\n"
+        "Send /cancel at any point to stop."
+    )
+
+    channel_msg = await manual_ask(
+        client=client,
+        chat_id=message.chat.id,
+        text=(
+            "**Step 1/3 — Source channel**\n\n"
+            "Send the channel as `@username`, a numeric id like "
+            "`-1001234567890`, or any message link from it.\n\n"
+            "I must be a member of the channel to read it."
+        ),
+        timeout=300,
+        filters=filters.text,
+    )
+    if not channel_msg or channel_msg.text.strip().lower() in ("/cancel", "cancel"):
+        await message.reply_text("Cancelled.")
+        return
+
+    channel, _hint_id = _parse_books_channel_input(channel_msg.text)
+    if not channel:
+        await message.reply_text("❌ That doesn't look like a channel. Cancelled.")
+        return
+
+    range_msg = await manual_ask(
+        client=client,
+        chat_id=message.chat.id,
+        text=(
+            "**Step 2/3 — How much?**\n\n"
+            "Send `all` to import every book file in the channel, or a range of "
+            "message ids like `100-500`. You can also paste two message links "
+            "separated by a space."
+        ),
+        timeout=300,
+        filters=filters.text,
+    )
+    if not range_msg or range_msg.text.strip().lower() in ("/cancel", "cancel"):
+        await message.reply_text("Cancelled.")
+        return
+
+    start_id = end_id = None
+    answer = range_msg.text.strip()
+    if answer.lower() != "all":
+        ids = [int(n) for n in re.findall(r"\d+", answer)]
+        links = [parse_telegram_link(p) for p in answer.split()]
+        links = [l for l in links if l]
+        if len(links) == 2:
+            start_id, end_id = links[0]["message_id"], links[1]["message_id"]
+        elif len(ids) == 2:
+            start_id, end_id = ids[0], ids[1]
+        else:
+            await message.reply_text(
+                "❌ I need either `all` or two message ids, e.g. `100-500`. "
+                "Cancelled."
+            )
+            return
+        if start_id > end_id:
+            start_id, end_id = end_id, start_id
+
+    enrich_msg = await manual_ask(
+        client=client,
+        chat_id=message.chat.id,
+        text=(
+            "**Step 3/3 — Metadata and covers**\n\n"
+            "Send `yes` to also read the title/author out of each file and "
+            "generate cover images. This downloads every book one at a time, so "
+            "it's much slower but gives a properly filled library.\n\n"
+            "Send `no` for a fast import — filenames only. You can always run "
+            "/enrich_books afterwards."
+        ),
+        timeout=300,
+        filters=filters.text,
+    )
+    if not enrich_msg or enrich_msg.text.strip().lower() in ("/cancel", "cancel"):
+        await message.reply_text("Cancelled.")
+        return
+    enrich = enrich_msg.text.strip().lower() in ("yes", "y", "true", "1", "ok")
+
+    import_id = secrets.token_hex(8)
+    scope = "everything" if start_id is None else f"messages {start_id}–{end_id}"
+    status_msg = await message.reply_text(
+        f"⏳ Starting import from `{channel}` ({scope})…\n\n"
+        f"`/cancel_import {import_id}`"
+    )
+
+    task = asyncio.create_task(
+        _run_books_import(
+            client,
+            message.chat.id,
+            status_msg,
+            import_id,
+            channel_identifier=channel,
+            start_msg_id=start_id,
+            end_msg_id=end_id,
+            skip_duplicates=True,
+            enrich=enrich,
+            generate_covers=enrich,
+        )
+    )
+    _BULK_IMPORT_TASKS.add(task)
+    task.add_done_callback(_BULK_IMPORT_TASKS.discard)
+
+
+@main_bot.on_message(
+    filters.command("cancel_import")
+    & filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS)
+)
+async def cancel_books_import_handler(client, message):
+    """Stop a running books import. Books already imported are kept."""
+    from utils.books_import import IMPORT_PROGRESS, cancel_import
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        running = [
+            i
+            for i, p in IMPORT_PROGRESS.items()
+            if p.get("status") not in ("done", "cancelled", "error")
+        ]
+        if not running:
+            await message.reply_text("Nothing is importing right now.")
+            return
+        await message.reply_text(
+            "Running imports:\n"
+            + "\n".join(f"`/cancel_import {i}`" for i in running)
+        )
+        return
+
+    import_id = parts[1].strip()
+    if cancel_import(import_id):
+        await message.reply_text(
+            "🛑 Cancelling. This stops the import; it does not remove books "
+            "that were already added."
+        )
+    else:
+        await message.reply_text(f"❌ No running import with id `{import_id}`.")
+
+
+@main_bot.on_message(
+    filters.command("enrich_books")
+    & filters.private
+    & filters.user(config.TELEGRAM_ADMIN_IDS)
+)
+async def enrich_books_handler(client, message):
+    """
+    Fill in metadata and covers for books that don't have them yet — whether
+    they came from a fast import or were added one at a time. Resumable: each
+    book is marked as it finishes, so re-running only picks up what's left.
+    """
+    from utils.books_import import (
+        IMPORT_CANCEL,
+        IMPORT_PROGRESS,
+        count_unenriched,
+        enrich_books,
+    )
+
+    pending = count_unenriched()
+    if not pending:
+        await message.reply_text("✅ Every book already has metadata. Nothing to do.")
+        return
+
+    import_id = secrets.token_hex(8)
+    IMPORT_PROGRESS[import_id] = {
+        "import_id": import_id,
+        "status": "enriching",
+        "channel": "library",
+        "channel_name": "existing library",
+        "enrich_total": pending,
+        "enrich_done": 0,
+        "start_time": time.time(),
+    }
+    status_msg = await message.reply_text(
+        f"✨ Enriching **{pending}** book(s), one at a time to stay inside the "
+        f"server's memory limit.\n\n`/cancel_import {import_id}`"
+    )
+
+    async def _run():
+        last_render = None
+        try:
+            work = asyncio.create_task(
+                enrich_books(None, import_id=import_id, generate_covers=True)
+            )
+            _BULK_IMPORT_TASKS.add(work)
+            work.add_done_callback(_BULK_IMPORT_TASKS.discard)
+
+            while True:
+                done = work.done()
+                rendered = _format_books_import_status(
+                    IMPORT_PROGRESS.get(import_id, {"import_id": import_id})
+                )
+                if rendered != last_render:
+                    last_render = rendered
+                    try:
+                        await status_msg.edit_text(rendered)
+                    except Exception:
+                        pass
+                if done:
+                    break
+                await asyncio.sleep(_BOOKS_STATUS_EDIT_INTERVAL)
+
+            summary = work.result() or {}
+            IMPORT_PROGRESS[import_id].update(summary)
+            IMPORT_PROGRESS[import_id]["status"] = (
+                "cancelled" if import_id in IMPORT_CANCEL else "done"
+            )
+            await client.send_message(
+                message.chat.id,
+                f"✅ Enriched {summary.get('enriched', 0)} book(s), "
+                f"{summary.get('covers', 0)} cover(s) generated."
+                + (
+                    f"\n{summary.get('skipped_memory', 0)} deferred for memory — "
+                    "run /enrich_books again to retry them."
+                    if summary.get("skipped_memory")
+                    else ""
+                ),
+            )
+        except Exception as e:
+            logger.error(f"Books enrich task failed: {e}")
+            IMPORT_PROGRESS.setdefault(import_id, {})["status"] = "error"
+            IMPORT_PROGRESS[import_id]["error_msg"] = str(e)
+            try:
+                await client.send_message(message.chat.id, f"❌ Enrich failed: {e}")
+            except Exception:
+                pass
+        finally:
+            IMPORT_CANCEL.discard(import_id)
+
+    task = asyncio.create_task(_run())
+    _BULK_IMPORT_TASKS.add(task)
+    task.add_done_callback(_BULK_IMPORT_TASKS.discard)
+
+
+# =================== END BOOKS LIBRARY SECTION =============================
+# Everything below this line belongs to the drive/courses side again.
 
 
 async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id, destination_folder, resume_from_batch=0):
@@ -767,9 +1211,15 @@ async def bulk_import_files(client, user_chat_id, channel_name, start_id, end_id
         }
         DRIVE_DATA.isUpdated = True  # signal backup task to save, don't block here
 
+        # Built outside the f-string on purpose: an escape sequence inside an
+        # f-string *expression* is a SyntaxError before Python 3.12, and this
+        # module is imported at startup, so it took the whole bot down.
+        _heading = (
+            "\U0001f504 **Resuming" if is_resume else "\u26a1 **Starting"
+        )
         status_msg = await client.send_message(
             user_chat_id,
-            f"{'\U0001f504 **Resuming' if is_resume else '\u26a1 **Starting'} Bulk Forward Import**\n\n"
+            f"{_heading} Bulk Forward Import**\n\n"
             f"**Channel:** {channel_name}\n"
             f"**Range:** {start_id:,} \u2192 {end_id:,} ({total_range:,} messages)\n"
             f"**Batches:** {total_batches} \u00d7 {FORWARD_BATCH} IDs\n"
